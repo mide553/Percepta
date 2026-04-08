@@ -1,0 +1,44 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+	margin: 0;
+	padding: 0;
+}
+
+button {
+	font-family: inherit;
+	cursor: pointer;
+}
+
+@keyframes spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+@keyframes fadeUp {
+	from {
+		opacity: 0;
+		transform: translateY(8px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+.finding {
+	animation: fadeUp 0.3s ease both;
+}
+
+.finding:hover {
+	background: #f0f4ff !important;
+}
+
+.upload-zone:hover {
+	border-color: #2563eb !important;
+	background: #f5f8ff !important;
+}
