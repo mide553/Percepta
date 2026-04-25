@@ -861,4 +861,8 @@
 
 		{/if}
 	</main>
+
+	<footer style="text-align:center;padding:20px 24px;border-top:1px solid var(--border-subtle);margin-top:auto;">
+		<p style="font-size:11px;color:var(--text-4);">Percepta is a non-profit prototype developed as part of a Bachelor's thesis. Not intended for commercial use.</p>
+	</footer>
 </div>
