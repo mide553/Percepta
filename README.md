@@ -112,4 +112,4 @@ static/                   # Background SVGs, favicon
 
 ## App UI
 
-[UI](app/static/percepta.jpg)
+![App interface](app/static/percepta.jpg?raw=true "UI")
