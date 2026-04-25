@@ -108,3 +108,8 @@ static/                   # Background SVGs, favicon
 | Variable | Required | Description |
 |---|---|---|
 | `GEMINI_API_KEY` | Yes (for AI modes) | Google Gemini API key |
+
+
+## App UI
+
+[UI](app/static/percepta.jpg)
