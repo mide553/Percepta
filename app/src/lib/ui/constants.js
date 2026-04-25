@@ -1,33 +1,34 @@
-/** @type {Record<string, { color: string; short: string; passMsg: string }>} */
+/** @type {Record<string, { color: string; darkColor: string; short: string; passMsg: string }>} */
 export const CATEGORY_META = {
-    'Perceptual Contrast': { color: '#d97706', short: 'PC', passMsg: 'Text contrast is comfortable across the page.' },
-    'Optical Centering': { color: '#7c3aed', short: 'OC', passMsg: 'Visual balance looks well-centred.' },
-    'Visual Hierarchy': { color: '#059669', short: 'VH', passMsg: 'Information hierarchy is clearly defined.' },
-    'Typography': { color: '#0284c7', short: 'TY', passMsg: 'Line lengths are within a comfortable reading range.' },
-    'Colour Palette': { color: '#c026d3', short: 'CP', passMsg: 'Colour variety feels appropriate and intentional.' },
-    'Tonal Range': { color: '#2563eb', short: 'TR', passMsg: 'Good tonal variation across light and dark areas.' },
-    'Colour Temperature': { color: '#db2777', short: 'CT', passMsg: 'Light and dark areas use contrasting colour temperatures, giving the palette depth.' },
-    'Spacing Rhythm': { color: '#0891b2', short: 'SR', passMsg: 'Spacing feels consistent and rhythmic.' },
+    'Readability': { color: '#d97706', darkColor: '#fbbf24', short: 'RD', passMsg: 'Text contrast and legibility are comfortable across the page.' },
+    'Visual Weight': { color: '#7c3aed', darkColor: '#c4b5fd', short: 'VW', passMsg: 'Visual weight is well-balanced and centred across the layout.' },
+    'Visual Hierarchy': { color: '#059669', darkColor: '#34d399', short: 'VH', passMsg: 'Information hierarchy is clearly defined.' },
+    'Typography': { color: '#0284c7', darkColor: '#38bdf8', short: 'TY', passMsg: 'Line lengths are within a comfortable reading range.' },
+    'Colour Palette': { color: '#c026d3', darkColor: '#e879f9', short: 'CP', passMsg: 'Colour variety, tonal range, and temperature feel appropriate and intentional.' },
+    'Spacing & Layout': { color: '#0891b2', darkColor: '#22d3ee', short: 'SL', passMsg: 'Spacing feels consistent and content groups are clearly separated.' },
+    'Interactive Targets': { color: '#059669', darkColor: '#34d399', short: 'IT', passMsg: 'Tap targets are well-sized and spaced apart to prevent accidental activations.' },
+    'Icon & Image Size': { color: '#ea580c', darkColor: '#fb923c', short: 'IS', passMsg: 'Images and icons are large enough to convey meaning clearly.' },
+    'Layout Order': { color: '#6366f1', darkColor: '#a5b4fc', short: 'LO', passMsg: 'Content column widths are consistent and well-aligned.' },
     // legacy keys kept for backward compat
-    'Visual Center of Mass': { color: '#2563eb', short: 'VCM', passMsg: '' },
-    'Optical Overshoot': { color: '#db2777', short: 'OO', passMsg: '' },
+    'Optical Overshoot': { color: '#db2777', darkColor: '#f9a8d4', short: 'OO', passMsg: '' },
 };
 
 export const CATEGORY_ORDER = [
-    'Perceptual Contrast',
-    'Optical Centering',
+    'Readability',
+    'Visual Weight',
     'Visual Hierarchy',
     'Typography',
     'Colour Palette',
-    'Tonal Range',
-    'Colour Temperature',
-    'Spacing Rhythm',
+    'Spacing & Layout',
+    'Interactive Targets',
+    'Icon & Image Size',
+    'Layout Order',
 ];
 
 export const SEV = {
-    critical: { label: 'Critical', color: '#ef4444' },
-    warning: { label: 'Warning', color: '#f59e0b' },
-    info: { label: 'Info', color: '#6b7280' }
+    critical: { label: 'Critical', color: '#ef4444', darkColor: '#fca5a5' },
+    warning: { label: 'Warning', color: '#f59e0b', darkColor: '#fcd34d' },
+    info: { label: 'Info', color: '#6b7280', darkColor: '#9ca3af' },
 };
 
 export const LOADING_STEPS = [
@@ -46,5 +47,26 @@ export const ALGO_LOADING_STEPS = [
     'Measuring visual balance...',
     'Analysing colour palette...',
     'Checking spacing and layout...',
+    'Compiling report...'
+];
+
+export const COMPARE_LOADING_STEPS = [
+    'Opening the page in a browser...',
+    'Taking a screenshot...',
+    'Reading page structure and styles...',
+    'Running algorithmic analysis...',
+    'Sending screenshot to AI...',
+    'Waiting for AI analysis...',
+    'Finding gaps and differences...',
+    'Compiling comparison report...'
+];
+
+export const ALGO_AI_LOADING_STEPS = [
+    'Opening the page in a browser...',
+    'Taking a screenshot...',
+    'Reading page structure and styles...',
+    'Running algorithmic checks...',
+    'Writing plain-language findings...',
+    'Polishing report language...',
     'Compiling report...'
 ];

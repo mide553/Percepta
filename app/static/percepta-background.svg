@@ -1,0 +1,76 @@
+<svg width="1920" height="1080" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Noise texture -->
+    <filter id="noise">
+      <feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="3" stitchTiles="stitch"/>
+      <feColorMatrix type="saturate" values="0"/>
+      <feComponentTransfer>
+        <feFuncA type="discrete" tableValues="0 0 0 0.08"/>
+      </feComponentTransfer>
+    </filter>
+    
+    <!-- Grid pattern -->
+    <pattern id="grid" width="60" height="60" patternUnits="userSpaceOnUse">
+      <path d="M 60 0 L 0 0 0 60" fill="none" stroke="#404054" stroke-width="0.5" opacity="0.3"/>
+    </pattern>
+    
+    <!-- Depth gradients -->
+    <radialGradient id="mesh1" cx="25%" cy="25%">
+      <stop offset="0%" stop-color="#23232a"/>
+      <stop offset="100%" stop-color="#1c1c22"/>
+    </radialGradient>
+    
+    <radialGradient id="mesh2" cx="75%" cy="75%">
+      <stop offset="0%" stop-color="#2a2a32"/>
+      <stop offset="100%" stop-color="#16161c"/>
+    </radialGradient>
+    
+    <!-- Accent gradient -->
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#313140" stop-opacity="0.15"/>
+      <stop offset="50%" stop-color="#23232a" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#2a2a32" stop-opacity="0.15"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Base layer: page base -->
+  <rect width="1920" height="1080" fill="#1c1c22"/>
+  
+  <!-- Gradient depth -->
+  <rect width="1920" height="1080" fill="url(#mesh1)" opacity="0.6"/>
+  <rect width="1920" height="1080" fill="url(#mesh2)" opacity="0.4"/>
+  
+  <!-- Grid pattern -->
+  <rect width="1920" height="1080" fill="url(#grid)"/>
+  
+  <!-- Accent overlay -->
+  <rect width="1920" height="1080" fill="url(#accent)"/>
+  
+  <!-- UI analysis geometric elements -->
+  <g opacity="0.35">
+    <!-- Quadrant dividers -->
+    <line x1="960" y1="0" x2="960" y2="1080" stroke="#404054" stroke-width="1" stroke-dasharray="10 15"/>
+    <line x1="0" y1="540" x2="1920" y2="540" stroke="#404054" stroke-width="1" stroke-dasharray="10 15"/>
+    
+    <!-- Measurement zones -->
+    <circle cx="400" cy="300" r="150" fill="none" stroke="#404054" stroke-width="1.5" opacity="0.6"/>
+    <circle cx="400" cy="300" r="100" fill="none" stroke="#313140" stroke-width="1" opacity="0.5"/>
+    
+    <circle cx="1520" cy="780" r="200" fill="none" stroke="#404054" stroke-width="1.5" opacity="0.5"/>
+    <circle cx="1520" cy="780" r="130" fill="none" stroke="#313140" stroke-width="1" opacity="0.4"/>
+    
+    <!-- Spacing markers -->
+    <g transform="translate(1700, 150)">
+      <rect x="0" y="0" width="4" height="80" fill="#404054" opacity="0.7"/>
+      <rect x="0" y="100" width="4" height="50" fill="#313140" opacity="0.7"/>
+      <rect x="0" y="170" width="4" height="100" fill="#404054" opacity="0.7"/>
+    </g>
+    
+    <!-- Corner elements -->
+    <rect x="100" y="100" width="200" height="1" fill="#404054" opacity="0.5"/>
+    <rect x="100" y="100" width="1" height="150" fill="#404054" opacity="0.5"/>
+  </g>
+  
+  <!-- Noise overlay -->
+  <rect width="1920" height="1080" filter="url(#noise)"/>
+</svg>

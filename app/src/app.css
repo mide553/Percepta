@@ -1,5 +1,98 @@
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
 
+/* ── Theme tokens ─────────────────────────────────────────────────────── */
+:root {
+	/* Elegant gray — light (default) */
+	--bg: #f4f4f5;
+	/* zinc-100  — subtle cool-gray page bg */
+	--surface: #ffffff;
+	/* white cards float above bg */
+	--surface-2: #f9f9fa;
+	/* barely-off-white panels */
+	--surface-3: #efeff1;
+	/* inputs, canvas bg */
+	--border: #e4e4e7;
+	/* zinc-200 */
+	--border-subtle: #ececee;
+	--nav-bg: #eaeaec;
+	/* between bg and surface */
+	--text: #09090b;
+	/* zinc-950  — 18.7:1 on white ✓ AAA */
+	--text-2: #3f3f46;
+	/* zinc-700  — 10.2:1 on white ✓ AAA */
+	--text-3: #71717a;
+	/* zinc-500  —  4.6:1 on white ✓ AA  */
+	--text-4: #a1a1aa;
+	/* zinc-400  — decorative/secondary */
+	--text-5: #d4d4d8;
+	/* zinc-300  — muted decorative */
+	--active-finding-bg: #eef2ff;
+}
+
+[data-theme="dark"] {
+	/*
+	 * Cool charcoal — verified WCAG AA against worst-case surface-3
+	 * Elevation scale: bg (darkest) → surface → surface-2 → surface-3 (lightest)
+	 */
+
+	/* Backgrounds */
+	--bg: #1c1c22;
+	/* page base */
+	--nav-bg: #16161c;
+	/* nav band, anchored below bg */
+	--surface: #23232a;
+	/* cards */
+	--surface-2: #2a2a32;
+	/* panels within cards */
+	--surface-3: #313140;
+	/* inputs, highlighted rows */
+	--border: #404054;
+	--border-subtle: #2d2d3a;
+
+	/* Text — all ratios measured against surface-3 (#313140, L=0.032), the hardest case */
+	--text: #ededf4;
+	/* L=0.851 → 14.4:1 ✓ AAA */
+	--text-2: #ccccd8;
+	/* L=0.610 →  9.5:1 ✓ AAA */
+	--text-3: #b2b2c6;
+	/* L=0.453 →  6.7:1 ✓ AAA */
+	--text-4: #9c9cac;
+	/* L=0.338 →  4.7:1 ✓ AA  */
+	--text-5: #5a5a72;
+	/* decorative separators/dots only */
+
+	--active-finding-bg: #1e1e2e;
+
+	/* Background image */
+	--page-bg-image: url('/percepta-background.svg');
+}
+
+/* ── Navbar ───────────────────────────────────────────────────── */
+.app-nav {
+	background: var(--nav-bg);
+	border-bottom: 1px solid #c4c4cc;
+	padding: 0 32px;
+	height: 56px;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	position: sticky;
+	top: 0;
+	z-index: 50;
+}
+
+[data-theme="dark"] .app-nav {
+	border-bottom-color: var(--border-subtle);
+}
+
+/* Prevent autofill from breaking dark mode */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+	-webkit-box-shadow: 0 0 0 30px var(--surface-3) inset !important;
+	-webkit-text-fill-color: var(--text) !important;
+}
+
 *,
 *::before,
 *::after {
@@ -24,6 +117,7 @@ button {
 		opacity: 0;
 		transform: translateY(8px);
 	}
+
 	to {
 		opacity: 1;
 		transform: translateY(0);
@@ -35,10 +129,10 @@ button {
 }
 
 .finding:hover {
-	background: #f0f4ff !important;
+	background: var(--active-finding-bg) !important;
 }
 
 .upload-zone:hover {
 	border-color: #2563eb !important;
-	background: #f5f8ff !important;
+	background: var(--surface-2) !important;
 }

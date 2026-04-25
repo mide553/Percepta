@@ -1,0 +1,100 @@
+<svg width="1920" height="1080" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Noise texture -->
+    <filter id="noise">
+      <feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="3" stitchTiles="stitch"/>
+      <feColorMatrix type="saturate" values="0"/>
+      <feComponentTransfer>
+        <feFuncA type="discrete" tableValues="0 0 0 0.06"/>
+      </feComponentTransfer>
+    </filter>
+    
+  <defs>
+    <!-- Noise texture -->
+    <filter id="noise">
+      <feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="3" stitchTiles="stitch"/>
+      <feColorMatrix type="saturate" values="0"/>
+      <feComponentTransfer>
+        <feFuncA type="discrete" tableValues="0 0 0 0.06"/>
+      </feComponentTransfer>
+    </filter>
+    
+    <!-- Grid pattern -->
+    <pattern id="grid" width="60" height="60" patternUnits="userSpaceOnUse">
+      <path d="M 60 0 L 0 0 0 60" fill="none" stroke="#e4e4e7" stroke-width="0.5" opacity="0.5"/>
+    </pattern>
+    
+    <!-- Depth gradients -->
+    <radialGradient id="mesh1" cx="25%" cy="25%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#f9f9fa"/>
+    </radialGradient>
+    
+    <radialGradient id="mesh2" cx="75%" cy="75%">
+      <stop offset="0%" stop-color="#efeff1"/>
+      <stop offset="100%" stop-color="#eaeaec"/>
+    </radialGradient>
+    
+    <!-- Accent gradient with blue -->
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2563eb" stop-opacity="0.02"/>
+      <stop offset="50%" stop-color="#3b82f6" stop-opacity="0.015"/>
+      <stop offset="100%" stop-color="#2563eb" stop-opacity="0.02"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Base layer: page base -->
+  <rect width="1920" height="1080" fill="#f4f4f5"/>
+  
+  <!-- Gradient depth -->
+  <rect width="1920" height="1080" fill="url(#mesh1)" opacity="0.5"/>
+  <rect width="1920" height="1080" fill="url(#mesh2)" opacity="0.4"/>
+  
+  <!-- Grid pattern -->
+  <rect width="1920" height="1080" fill="url(#grid)"/>
+  
+  <!-- Accent overlay -->
+  <rect width="1920" height="1080" fill="url(#accent)"/>
+  </defs>
+  
+  <!-- Base layer: light gray -->
+  <rect width="1920" height="1080" fill="#fafafa"/>
+  
+  <!-- Gradient depth -->
+  <rect width="1920" height="1080" fill="url(#mesh1)" opacity="0.5"/>
+  <rect width="1920" height="1080" fill="url(#mesh2)" opacity="0.4"/>
+  
+  <!-- Grid pattern -->
+  <rect width="1920" height="1080" fill="url(#grid)"/>
+  
+  <!-- Accent overlay -->
+  <rect width="1920" height="1080" fill="url(#accent)"/>
+  
+  <!-- UI analysis geometric elements -->
+  <g opacity="0.4">
+    <!-- Quadrant dividers -->
+    <line x1="960" y1="0" x2="960" y2="1080" stroke="#2563eb" stroke-width="1" stroke-dasharray="10 15" opacity="0.3"/>
+    <line x1="0" y1="540" x2="1920" y2="540" stroke="#2563eb" stroke-width="1" stroke-dasharray="10 15" opacity="0.3"/>
+    
+    <!-- Measurement zones -->
+    <circle cx="400" cy="300" r="150" fill="none" stroke="#2563eb" stroke-width="1.5" opacity="0.25"/>
+    <circle cx="400" cy="300" r="100" fill="none" stroke="#3b82f6" stroke-width="1" opacity="0.2"/>
+    
+    <circle cx="1520" cy="780" r="200" fill="none" stroke="#2563eb" stroke-width="1.5" opacity="0.2"/>
+    <circle cx="1520" cy="780" r="130" fill="none" stroke="#3b82f6" stroke-width="1" opacity="0.15"/>
+    
+    <!-- Spacing markers -->
+    <g transform="translate(1700, 150)">
+      <rect x="0" y="0" width="4" height="80" fill="#2563eb" opacity="0.35"/>
+      <rect x="0" y="100" width="4" height="50" fill="#3b82f6" opacity="0.35"/>
+      <rect x="0" y="170" width="4" height="100" fill="#2563eb" opacity="0.35"/>
+    </g>
+    
+    <!-- Corner elements -->
+    <rect x="100" y="100" width="200" height="1" fill="#2563eb" opacity="0.25"/>
+    <rect x="100" y="100" width="1" height="150" fill="#2563eb" opacity="0.25"/>
+  </g>
+  
+  <!-- Noise overlay -->
+  <rect width="1920" height="1080" filter="url(#noise)"/>
+</svg>
