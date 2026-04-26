@@ -1,0 +1,9 @@
+node_modules/
+.svelte-kit/
+build/
+.env
+.env.*
+!.env.example
+book_text_and_images/
+docs/
+*.log

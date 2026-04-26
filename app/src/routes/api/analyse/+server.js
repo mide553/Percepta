@@ -9,6 +9,26 @@ import { analyseAlgorithmically } from '$lib/analysis/algorithmic.js';
 const VP_W = 1440;
 const VP_H = 900;
 
+// Singleton browser — shared across all requests, one isolated context per request.
+/** @type {import('puppeteer').Browser | null} */
+let _browser = null;
+
+async function getBrowser() {
+	if (_browser?.connected) return _browser;
+	_browser = await puppeteer.launch({
+		headless: true,
+		executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+		args: [
+			'--no-sandbox',
+			'--disable-setuid-sandbox',
+			'--disable-dev-shm-usage',
+			'--disable-gpu',
+		],
+	});
+	_browser.on('disconnected', () => { _browser = null; });
+	return _browser;
+}
+
 async function callGemini(apiKey, screenshotB64) {
 	const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 	const body = JSON.stringify({
@@ -195,13 +215,10 @@ export async function POST({ request }) {
 		pageUrl = 'https://' + pageUrl;
 	}
 
-	let browser;
+	const browser = await getBrowser();
+	const context = await browser.createBrowserContext();
 	try {
-		browser = await puppeteer.launch({
-			headless: true,
-			args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-		});
-		const page = await browser.newPage();
+		const page = await context.newPage();
 		await page.setViewport({ width: VP_W, height: VP_H, deviceScaleFactor: 1 });
 
 		try {
@@ -664,6 +681,6 @@ export async function POST({ request }) {
 			return json({ mode: 'compare', screenshot: screenshotDataUrl, algo: algoResult, ai: aiResult });
 		}
 	} finally {
-		await browser?.close();
+		await context.close();
 	}
 }

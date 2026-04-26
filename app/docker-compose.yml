@@ -1,0 +1,12 @@
+services:
+  percepta:
+    build: .
+    env_file:
+      - .env
+    restart: unless-stopped
+    networks:
+      - secure_web_net
+
+networks:
+  secure_web_net:
+    external: true
