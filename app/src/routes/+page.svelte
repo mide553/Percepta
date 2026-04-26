@@ -14,14 +14,22 @@
 	let canvasEl = $state(null);
 	/** @type {HTMLImageElement | null} */
 	let imgEl = $state(null);
+	/** @type {Array<{i:number, x:number, y:number, w:number, h:number}>} */
+	let badgeRects = [];
 	let mode = $state(/** @type {'ai' | 'algo' | 'algo-ai' | 'compare' | 'compare-algo-ai'} */ ('algo-ai'));
 	let resultMode = $state(/** @type {'ai' | 'algo' | 'algo-ai' | 'compare' | 'compare-algo-ai'} */ ('algo-ai'));
 	let theme = $state(/** @type {'light' | 'dark'} */ ('dark'));
-	/** @type {Array<{i:number, x:number, y:number, w:number, h:number}>} */
-	let badgeRects = [];
 	let expandedFixes = $state(/** @type {Record<string, boolean>} */ ({}));
 	let compareResult = $state(/** @type {any} */ (null));
 	let compareAlgoAiResult = $state(/** @type {any} */ (null));
+
+	// Feedback panel
+	let feedbackOpen = $state(false);
+	let feedbackName = $state('');
+	let feedbackRole = $state('');
+	let feedbackComment = $state('');
+	let feedbackStatus = $state(/** @type {'idle'|'sending'|'sent'|'error'} */ ('idle'));
+	let feedbackError = $state('');
 
 	const RING_C = 2 * Math.PI * 36;
 
@@ -122,7 +130,7 @@
 			if (!canvasEl || !imgEl) return;
 			const W = imgEl.naturalWidth;
 			const H = imgEl.naturalHeight;
-			if (!W || !H) return; // image not decoded yet — onload will retry
+			if (!W || !H) return;
 			const ctx = canvasEl.getContext('2d');
 			if (!ctx) return;
 			canvasEl.width = W;
@@ -159,6 +167,27 @@
 	$effect(() => {
 		drawCanvas();
 	});
+
+	async function submitFeedback() {
+		if (!feedbackComment.trim()) return;
+		feedbackStatus = 'sending';
+		feedbackError = '';
+		try {
+			const res = await fetch('/api/feedback', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ name: feedbackName.trim(), role: feedbackRole.trim(), comment: feedbackComment.trim() }),
+			});
+			if (!res.ok) {
+				const err = await res.json().catch(() => ({ error: 'Request failed' }));
+				throw new Error(err.error ?? 'Request failed');
+			}
+			feedbackStatus = 'sent';
+		} catch (e) {
+			feedbackError = /** @type {Error} */ (e).message;
+			feedbackStatus = 'error';
+		}
+	}
 </script>
 
 <svelte:head>
@@ -235,6 +264,7 @@
 				<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{theme === 'light' ? 'var(--text-3)' : 'var(--text-5)'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition:stroke 0.2s;flex-shrink:0;"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
 			</button>
 			<span style="font-size:12px;color:var(--text-4);">Login</span>
+			<span style="font-size:12px;color:var(--text-4);">Register</span>
 		</div>
 	</nav>
 
@@ -729,17 +759,13 @@
 			<!-- Two-column layout: sticky screenshot LEFT, scrollable findings RIGHT -->
 			<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start;">
 
-				<!-- LEFT: annotated screenshot — sticky so it stays visible while scrolling findings -->
+				<!-- LEFT: screenshot -->
 				<div style="position:sticky;top:72px;">
 					<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">
-						<div style="font-size:11px;font-weight:600;color:var(--text-4);letter-spacing:0.08em;text-transform:uppercase;padding:12px 18px;border-bottom:1px solid var(--border-subtle);display:flex;align-items:center;justify-content:space-between;">
-							<span>Visual Annotations</span>
-							<span style="font-size:11px;color:var(--text-5);font-weight:400;text-transform:none;letter-spacing:0;">Click a region to highlight</span>
-						</div>
 						<canvas
 							bind:this={canvasEl}
 							onclick={handleCanvasClick}
-							style="width:100%;display:block;cursor:crosshair;background:var(--surface-3);"
+							style="width:100%;display:block;background:var(--surface-3);"
 						></canvas>
 					</div>
 				</div>
@@ -865,4 +891,122 @@
 	<footer style="text-align:center;padding:20px 24px;border-top:1px solid var(--border-subtle);margin-top:auto;">
 		<p style="font-size:11px;color:var(--text-4);">Percepta is a non-profit prototype developed as part of a Bachelor's thesis. Not intended for commercial use.</p>
 	</footer>
+
+	<!-- ── Feedback floating button ───────────────────────────────────────── -->
+	<button
+		onclick={() => { feedbackOpen = !feedbackOpen; }}
+		title="Leave professional feedback"
+		aria-label="Open feedback panel"
+		style="position:fixed;bottom:24px;right:24px;z-index:1000;width:48px;height:48px;border-radius:50%;background:#2563eb;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 20px rgba(37,99,235,0.4);transition:transform 0.15s,box-shadow 0.15s;"
+		onmouseenter={(e) => { /** @type {HTMLButtonElement} */ (e.currentTarget).style.transform = 'scale(1.08)'; }}
+		onmouseleave={(e) => { /** @type {HTMLButtonElement} */ (e.currentTarget).style.transform = 'scale(1)'; }}
+	>
+		<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+			<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+		</svg>
+	</button>
+
+	{#if feedbackOpen}
+		<!-- Backdrop -->
+		<div
+			role="presentation"
+			onclick={() => { feedbackOpen = false; }}
+			style="position:fixed;inset:0;background:rgba(0,0,0,0.25);z-index:1001;backdrop-filter:blur(2px);"
+		></div>
+
+		<!-- Drawer -->
+		<div style="position:fixed;right:0;top:0;bottom:0;width:380px;max-width:100vw;background:var(--bg);border-left:1px solid var(--border);z-index:1002;display:flex;flex-direction:column;overflow:hidden;box-shadow:-8px 0 40px rgba(0,0,0,0.18);">
+
+			<!-- Drawer header -->
+			<div style="display:flex;align-items:center;justify-content:space-between;padding:20px 22px;border-bottom:1px solid var(--border);flex-shrink:0;">
+				<div>
+					<p style="font-size:11px;font-weight:700;color:#2563eb;letter-spacing:0.09em;text-transform:uppercase;margin-bottom:2px;">Professional Review</p>
+					<h3 style="font-size:17px;font-weight:700;color:var(--text);letter-spacing:-0.02em;margin:0;">Leave Feedback</h3>
+				</div>
+				<button
+					onclick={() => { feedbackOpen = false; }}
+					aria-label="Close feedback panel"
+					style="width:32px;height:32px;border-radius:8px;background:var(--surface);border:1px solid var(--border);cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--text-3);"
+				>
+					<svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2 2l10 10M12 2L2 12"/></svg>
+				</button>
+			</div>
+
+			<!-- Drawer body -->
+			<div style="flex:1;overflow-y:auto;padding:22px;">
+				{#if feedbackStatus === 'sent'}
+					<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:260px;gap:16px;text-align:center;">
+						<div style="width:56px;height:56px;border-radius:50%;background:#dcfce7;display:flex;align-items:center;justify-content:center;">
+							<svg width="26" height="26" viewBox="0 0 26 26" fill="none"><circle cx="13" cy="13" r="12" stroke="#059669" stroke-width="1.5"/><polyline points="7,13 11,17 19,9" stroke="#059669" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+						</div>
+						<div>
+							<p style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:6px;">Feedback submitted</p>
+							<p style="font-size:13px;color:var(--text-3);line-height:1.55;">Your comment has been recorded privately. Thank you for taking the time to review this tool.</p>
+						</div>
+						<button
+							onclick={() => { feedbackStatus = 'idle'; feedbackComment = ''; feedbackName = ''; feedbackRole = ''; feedbackOpen = false; }}
+							style="padding:10px 24px;border-radius:10px;background:#2563eb;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;"
+						>Close</button>
+					</div>
+				{:else}
+					<p style="font-size:13px;color:var(--text-3);line-height:1.6;margin-bottom:20px;">Comments are submitted privately and not shown publicly. This feedback helps improve Percepta.</p>
+
+					<div style="display:flex;flex-direction:column;gap:14px;">
+						<div>
+							<label style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Name <span style="color:var(--text-5);font-weight:400;">(optional)</span></label>
+							<input
+								type="text"
+								bind:value={feedbackName}
+								placeholder="Your name"
+								maxlength="120"
+								disabled={feedbackStatus === 'sending'}
+								style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:13px;font-family:inherit;color:var(--text);background:var(--surface);outline:none;box-sizing:border-box;"
+							/>
+						</div>
+						<div>
+							<label style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Role <span style="color:var(--text-5);font-weight:400;">(optional)</span></label>
+							<input
+								type="text"
+								bind:value={feedbackRole}
+								placeholder="e.g. UX Designer, Developer, Researcher"
+								maxlength="120"
+								disabled={feedbackStatus === 'sending'}
+								style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:13px;font-family:inherit;color:var(--text);background:var(--surface);outline:none;box-sizing:border-box;"
+							/>
+						</div>
+						<div>
+							<label style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Comment <span style="color:#ef4444;font-size:10px;margin-left:3px;">required</span></label>
+							<textarea
+								bind:value={feedbackComment}
+								placeholder="Share your thoughts — what works well, what's confusing, what could be improved…"
+								maxlength="2000"
+								rows="6"
+								disabled={feedbackStatus === 'sending'}
+								style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:13px;font-family:inherit;color:var(--text);background:var(--surface);outline:none;resize:vertical;min-height:120px;box-sizing:border-box;"
+							></textarea>
+							<p style="font-size:11px;color:var(--text-5);text-align:right;margin-top:3px;">{feedbackComment.length}/2000</p>
+						</div>
+
+						{#if feedbackStatus === 'error'}
+							<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px 12px;font-size:12px;color:#dc2626;">{feedbackError}</div>
+						{/if}
+
+						<button
+							onclick={submitFeedback}
+							disabled={!feedbackComment.trim() || feedbackStatus === 'sending'}
+							style="width:100%;padding:11px;border-radius:10px;border:none;background:{feedbackComment.trim() && feedbackStatus !== 'sending' ? '#2563eb' : 'var(--surface-3)'};color:{feedbackComment.trim() && feedbackStatus !== 'sending' ? '#fff' : 'var(--text-4)'};font-size:13px;font-weight:600;cursor:{feedbackComment.trim() && feedbackStatus !== 'sending' ? 'pointer' : 'not-allowed'};transition:all 0.15s;display:flex;align-items:center;justify-content:center;gap:7px;"
+						>
+							{#if feedbackStatus === 'sending'}
+								<span style="width:14px;height:14px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;display:inline-block;animation:spin 0.8s linear infinite;"></span>
+								Submitting…
+							{:else}
+								Submit Feedback
+							{/if}
+						</button>
+					</div>
+				{/if}
+			</div>
+		</div>
+	{/if}
+
 </div>

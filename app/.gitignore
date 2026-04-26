@@ -6,3 +6,4 @@ dist/
 .env.*
 !.env.example
 book_text_and_images/
+data/
