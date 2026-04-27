@@ -850,7 +850,7 @@
 																				src="/book-images/{img.src}"
 																				alt={img.caption}
 																				loading="lazy"
-																				style="width:100%;border-radius:6px;border:1px solid {c(cat)}25;display:block;"
+																				style="width:92%;border-radius:6px;border:1px solid {c(cat)}25;display:block;background:#fff;"
 																			/>
 																			<p style="font-size:11px;color:var(--text-3);margin-top:5px;line-height:1.45;">{img.caption}</p>
 																		</div>
