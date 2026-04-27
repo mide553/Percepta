@@ -344,27 +344,47 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
     // ── CHECK 2b — Top/Bottom Balance and Quadrant Distribution ───────────────
     {
         // Top vs bottom weight — measures the vertical axis analogue of left/right balance.
+        // Uses proportional area splitting: an element that spans the midline contributes
+        // weight to each half in proportion to how much of its area falls there.
+        // This avoids the bias caused by large elements whose centre falls just above or
+        // below the midline being assigned entirely to one half.
         let topW2 = 0, botW2 = 0;
         const qWeights = [0, 0, 0, 0]; // [top-left, top-right, bottom-left, bottom-right]
+        const midX = vpW / 2;
+        const midY = vpH / 2;
         for (const el of vis) {
-            const cx = el.rect.x + el.rect.w / 2;
-            const cy = el.rect.y + el.rect.h / 2;
             const bgL = (el.tag === 'img' || el.hasBackgroundImage) ? 0.35 : luma(el.bg[0], el.bg[1], el.bg[2]);
             const w = el.rect.w * el.rect.h * (1 - bgL) * (densityFactor.get(el) ?? 1.0);
-            if (cy < vpH / 2) topW2 += w; else botW2 += w;
-            const qi = (cx < vpW / 2 ? 0 : 1) + (cy < vpH / 2 ? 0 : 2);
-            qWeights[qi] += w;
+            if (w <= 0) continue;
+
+            // Proportional top/bottom split
+            const elTop = el.rect.y;
+            const elBot = el.rect.y + el.rect.h;
+            const h = Math.max(1, el.rect.h);
+            const topFracY = elBot <= midY ? 1 : (elTop >= midY ? 0 : (midY - elTop) / h);
+            topW2 += w * topFracY;
+            botW2 += w * (1 - topFracY);
+
+            // Proportional quadrant split (horizontal + vertical)
+            const elLeft = el.rect.x;
+            const elRight = el.rect.x + el.rect.w;
+            const ww = Math.max(1, el.rect.w);
+            const leftFracX = elRight <= midX ? 1 : (elLeft >= midX ? 0 : (midX - elLeft) / ww);
+            qWeights[0] += w * leftFracX * topFracY;           // top-left
+            qWeights[1] += w * (1 - leftFracX) * topFracY;     // top-right
+            qWeights[2] += w * leftFracX * (1 - topFracY);     // bottom-left
+            qWeights[3] += w * (1 - leftFracX) * (1 - topFracY); // bottom-right
         }
 
         // Sub-check A: top/bottom imbalance
         const tbTotal = topW2 + botW2;
         const tbRatio = tbTotal > 0 ? Math.abs(topW2 - botW2) / tbTotal : 0;
-        if (tbRatio > 0.45) {
+        if (tbRatio > 0.52) {
             const heavy = topW2 > botW2 ? 'top' : 'bottom';
             findings.push({
                 id: nid(),
                 category: 'Visual Weight',
-                severity: tbRatio > 0.60 ? 'warning' : 'info',
+                severity: tbRatio > 0.65 ? 'warning' : 'info',
                 element: `Strong top–bottom imbalance — the ${heavy} half of the page carries significantly more visual weight`,
                 issue: `The ${heavy} half of the viewport carries ${Math.round(tbRatio * 100)}% more visual weight than the opposite half. ${heavy === 'top' ? 'Top-heavy layouts can feel claustrophobic or unstable — as if the page is pressing down. This is common with large hero sections and dense navigation bars, but if unintentional it may push important below-the-fold content into visual obscurity.' : 'Bottom-heavy layouts are unusual and often unintentional. When the dominant visual mass sits in the lower half, critical content arrives too late in the user journey — most visitors form their first impression before scrolling reaches the bottom of the page.'}`,
                 recommendation: heavy === 'top'
@@ -389,7 +409,7 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
             // A 60% corner with 20% in the opposite quadrant is a strong asymmetric layout, not a flaw.
             const oppositeIdx = [3, 2, 1, 0][maxIdx];
             const oppositeShare = qShares[oppositeIdx];
-            if (maxShare > 0.62 && oppositeShare < 0.14) {
+            if (maxShare > 0.68 && oppositeShare < 0.12) {
                 findings.push({
                     id: nid(),
                     category: 'Visual Weight',
