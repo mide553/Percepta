@@ -196,7 +196,7 @@
 
 <div
 	data-theme={theme}
-	style="min-height:100vh;background:var(--bg);background-image:{theme === 'dark' ? 'url(/percepta-background.svg)' : 'url(/percepta-background-light.svg)'};background-size:cover;background-position:center top;color:var(--text);font-family:'Plus Jakarta Sans','Inter',sans-serif;"
+	style="min-height:100vh;background:var(--bg);background-image:{theme === 'dark' ? 'url(/percepta-background.svg)' : 'url(/percepta-background-light.svg)'};background-size:cover;background-position:center top;background-attachment:fixed;color:var(--text);font-family:'Plus Jakarta Sans','Inter',sans-serif;"
 >
 	<!-- Nav -->
 	<nav class="app-nav">
