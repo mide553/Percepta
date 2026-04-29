@@ -278,7 +278,13 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
         const dxN = (comX - vpW / 2) / vpW;
         const dyN = (comY - vpH / 2) / vpH;
         const offsetMag = Math.sqrt(dxN * dxN + dyN * dyN);
-        if (offsetMag > 0.10) {
+        // Pre-compute lr ratio so we can avoid duplicating the same message below.
+        const lrTotal = leftW + rightW;
+        const lrRatio = lrTotal > 0 ? Math.abs(leftW - rightW) / lrTotal : 0;
+        // Only emit the center-of-mass finding when the imbalance is primarily vertical
+        // OR when the left-right ratio check won't fire for the same issue.
+        const offsetPrimarilyHorizontal = Math.abs(dxN) > Math.abs(dyN) * 0.7;
+        if (offsetMag > 0.10 && !(offsetPrimarilyHorizontal && lrRatio > 0.40)) {
             const parts = [];
             if (Math.abs(dxN) > 0.06) parts.push(dxN > 0 ? 'right' : 'left');
             if (Math.abs(dyN) > 0.06) parts.push(dyN > 0 ? 'downward' : 'upward');
@@ -299,8 +305,6 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
         } else {
             strengths.push('The page is visually centred — no obvious leaning to one side.');
         }
-        const lrTotal = leftW + rightW;
-        const lrRatio = lrTotal > 0 ? Math.abs(leftW - rightW) / lrTotal : 0;
         if (lrRatio > 0.40) {
             const heavy = leftW > rightW ? 'left' : 'right';
             const light = heavy === 'left' ? 'right' : 'left';
@@ -2936,6 +2940,25 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
         strengths.push('No major visual problems were detected across the design.');
     } else if (strengths.length === 1) {
         strengths.push('Brightness is used consistently across the design.');
+    }
+
+    // ── Deduplication: remove redundant vertical-direction centroid findings ────
+    // CHECK 2a (centroid offset) and CHECK 2b (top/bottom ratio) can both fire for
+    // the same vertical imbalance, producing two near-identical findings. When CHECK 2b
+    // already emits a dedicated top/bottom finding, suppress any purely-vertical
+    // centroid finding from CHECK 2a ("Visual weight sits toward the upward/downward").
+    {
+        const hasTopBottomFinding = findings.some(f =>
+            f.category === 'Visual Weight' && f.element.includes('top–bottom imbalance')
+        );
+        if (hasTopBottomFinding) {
+            const purelyVertical = /^Visual weight sits toward the (upward|downward)$/;
+            for (let i = findings.length - 1; i >= 0; i--) {
+                if (findings[i].category === 'Visual Weight' && purelyVertical.test(findings[i].element)) {
+                    findings.splice(i, 1);
+                }
+            }
+        }
     }
 
     const categories = [...new Set(findings.map(f => f.category))];

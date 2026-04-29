@@ -51,9 +51,9 @@ Also generate:
   Write as if you are giving a short verbal design critique. Plain language, no bullet points, no jargon. Only include categories that have at least one finding.
 
 IMPORTANT image selection rules:
-- Each image's description states exactly WHEN it should be used. Follow those conditions strictly.
+- Each image's description states WHEN it should be used — follow these conditions.
 - Never use an image whose description says "split layout" or "left-right imbalance" for a top-to-bottom (vertical) imbalance finding, and vice versa.
-- If you are not confident an image matches the specific finding, omit it.
+- Select 1-3 images per finding when the condition in their description is met or clearly implied by the finding. Prefer including a relevant image over leaving bookImages empty.
 
 Return ONLY valid JSON, no markdown, no preamble:
 {

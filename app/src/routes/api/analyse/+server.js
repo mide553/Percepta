@@ -1,4 +1,4 @@
-﻿import { json, error } from '@sveltejs/kit';
+﻿import { error } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { SYSTEM_PROMPT, ALGO_AI_PROMPT } from '$lib/ai/prompt.js';
 import { BOOK_KNOWLEDGE } from '$lib/ai/bookKnowledge.js';
@@ -10,6 +10,32 @@ import { extractAndAnalyzeHTML } from '$lib/analysis/html.js';
 import { extractAndAnalyzeJS } from '$lib/analysis/js.js';
 
 const VP_W = 1440;
+
+/**
+ * Strip internal AI-instruction sentences from a bookImage desc so it reads
+ * as a plain user-facing caption.  Sentences that start with imperative
+ * directives ("show this only if …", "used to show how …", "together with …",
+ * etc.) are removed; the remaining descriptive sentences are joined and
+ * returned.  If nothing survives the filter the original string is returned
+ * unchanged so the fallback is never empty.
+ */
+function cleanCaption(desc) {
+	if (!desc) return '';
+	// Split on sentence boundaries (period/exclamation/question + whitespace).
+	// We keep the delimiter attached to the preceding sentence.
+	const sentences = desc.split(/(?<=[.!?])\s+/);
+	const instructional = [
+		/^used to show\b/i,
+		/^show this\b/i,
+		/^show only\b/i,
+		/^show if\b/i,
+		/^shown\b/i,        // "shown with …", "shown only when …", "shown together …"
+		/^together with\b/i,
+		/^only show\b/i,
+	];
+	const kept = sentences.filter(s => !instructional.some(re => re.test(s.trim())));
+	return kept.join(' ').trim() || desc;
+}
 const VP_H = 900;
 
 // Singleton browser — shared across all requests, one isolated context per request.
@@ -98,11 +124,14 @@ Use this technical context to provide more informed recommendations about the vi
 			// Exponential backoff: 4s, 12s
 			await new Promise(r => setTimeout(r, 4000 * Math.pow(3, attempt - 1)));
 		}
+		const _attemptT = Date.now();
+		console.log(`[Percepta:perf] callGemini attempt ${attempt + 1}/3 — sending request...`);
 		const response = await fetch(geminiUrl, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body
 		});
+		console.log(`[Percepta:perf] callGemini attempt ${attempt + 1}/3 — response ${response.status} in ${Date.now() - _attemptT}ms`);
 		if (response.ok) {
 			const data = await response.json();
 			const text = data.candidates?.[0]?.content?.parts
@@ -149,6 +178,7 @@ function checkImageConditionAgainstFinding(imageDesc, findingText, findingCatego
 		{ pattern: /button.*destructive/i, keywords: ['delete', 'remove', 'destructive', 'danger'] },
 		// Heading-related
 		{ pattern: /heading.*big/i, keywords: ['heading', 'large heading', 'oversized heading', 'h1', 'h2', 'title'] },
+		{ pattern: /heading.*hierarchy.*issue|heading.*too big|no primary heading|headings fail/i, keywords: ['heading', 'h1', 'hierarchy', 'title', 'structure'] },
 		// Background color
 		{ pattern: /background color.*content area/i, keywords: ['background', 'content area', 'colored background'] },
 		// Text contrast
@@ -181,6 +211,9 @@ function checkImageConditionAgainstFinding(imageDesc, findingText, findingCatego
 		{ pattern: /graph/i, keywords: ['graph', 'chart', 'visualization', 'trend'] },
 		// Links
 		{ pattern: /link.*no styling/i, keywords: ['link', 'anchor', 'href'] },
+		{ pattern: /links.*indistinguishable|links.*unstyled|links.*lack.*visual|links.*blend/i, keywords: ['link', 'indistinguishable', 'unstyled', 'blend', 'body text'] },
+		// Interactive targets
+		{ pattern: /small.*interactive.*element|touch target.*minimum|element.*smaller.*32px|small.*touch target/i, keywords: ['element', 'button', 'target', 'touch', 'smaller', '32', 'px'] },
 		// Custom styling
 		{ pattern: /checkbox.*radio button.*no styling/i, keywords: ['checkbox', 'radio', 'input'] },
 		{ pattern: /basic bullet point/i, keywords: ['bullet', 'list', 'ul'] },
@@ -260,60 +293,27 @@ When rewriting findings, incorporate this code-level context to make recommendat
 ${codeContextSummary}
 
 ---
-IMAGE SELECTION — CRITICAL INSTRUCTIONS
+IMAGE SELECTION GUIDE
 
-Each finding has an "availableImages" array. Each image entry contains:
-  src      — exact filename to use in bookImages
-  desc     — MANDATORY CONDITION + description. This is NOT just a description — it contains a CONDITION that MUST be satisfied.
-  pair     — (optional) companion image for ❌/✅ before/after sets
+Each finding has an "availableImages" array. Each entry has:
+  src   — exact filename to use in bookImages
+  desc  — description that may include a condition ("show this only if X")
+  pair  — (optional) companion image for before/after sets
 
-⚠️ MANDATORY CONDITIONAL LOGIC — READ EVERY WORD:
+SELECTION PROCESS — for each available image:
 
-The desc field contains CONDITIONS written as "show this only if X" or "show this image only if X". These are HARD REQUIREMENTS, not suggestions.
+1. If the desc contains "show this only if X" or "only if X":
+   - Does the finding's issue MENTION or CLEARLY IMPLY X? If yes → select.
+   - Does the finding's topic broadly match X even if not stated verbatim? If yes → select.
+   - Only skip if the condition is clearly about something the finding does NOT involve at all.
 
-YOU MUST FOLLOW THIS DECISION PROCESS FOR EVERY IMAGE:
+2. If the desc has no "only if" condition → select when it closely matches the finding's topic.
 
-1. READ the finding description carefully
-2. READ the image's desc field — look for "only if", "ONLY if", "show this only", "show this image only"
-3. EXTRACT the condition: what specific element/state/property must be present?
-4. EVALUATE: Does this finding's description explicitly mention or demonstrate that condition?
-   - If YES → condition is satisfied, you MAY select this image
-   - If NO → condition is NOT satisfied, you MUST NOT select this image, even if the topic seems related
-5. If unsure whether condition is met → DO NOT select the image (err on the side of NOT selecting)
+3. PAIRING: if you select an image that has a "pair" field → also include the pair partner.
 
-CONCRETE EXAMPLES:
+4. "shown only with imageXX" → only include as a pair partner, not independently.
 
-❌ WRONG:
-  Finding: "Buttons lack visual hierarchy"
-  Image desc: "show this only if there are 2 or more buttons next to each with same weight inside of a container/label"
-  → Finding mentions buttons but does NOT say "2 or more buttons next to each other with same weight"
-  → CONDITION NOT MET → DO NOT SELECT
-
-✅ CORRECT:
-  Finding: "Three equal-weight filled buttons offer no signal about which action is primary"
-  Image desc: "show this only if there are 2 or more buttons next to each with same weight inside of a container/label"
-  → Finding explicitly states "three equal-weight filled buttons" = 2+ buttons with same weight
-  → CONDITION MET → MAY SELECT
-
-❌ WRONG:
-  Finding: "Text contrast is insufficient"
-  Image desc: "show this image only if there is background color in content area"
-  → Finding is about contrast, not about background color in content area
-  → CONDITION NOT MET → DO NOT SELECT
-
-✅ CORRECT:
-  Finding: "Main content area has a colored background that competes with sidebar"
-  Image desc: "show this image only if there is background color in content area"
-  → Finding explicitly mentions "colored background" in "content area"
-  → CONDITION MET → MAY SELECT
-
-ADDITIONAL RULES:
-- "shown only with imageXX" → NEVER select independently, only as pair partner
-- If desc has NO explicit "only if" condition → select when it closely matches the finding
-- PAIRING: if you select an image with a "pair" field → you MUST include the pair partner
-- When in doubt → return [] rather than selecting an image with unmet conditions
-
-STRICTNESS: It is BETTER to return [] (no images) than to return images with unmet conditions. The user has explicitly requested that conditions be respected.
+AIM to select 1-3 images per finding when relevant images are available. It is better to include a relevant image than to leave bookImages empty.
 
 For each selected image, return an object with:
   src     — the exact filename
@@ -339,13 +339,19 @@ For each selected image, return an object with:
 		return { ...f, availableImages: available };
 	});
 
+	const bodyPayload = JSON.stringify({ overallScore, findings: findingsWithImages, bookKnowledge: bookKnowledgeContext });
 	const body = JSON.stringify({
 		system_instruction: { parts: [{ text: systemInstruction }] },
 		contents: [{
-			parts: [{ text: JSON.stringify({ overallScore, findings: findingsWithImages, bookKnowledge: bookKnowledgeContext }) }]
+			parts: [{ text: bodyPayload }]
 		}],
-		generationConfig: { maxOutputTokens: 32768, responseMimeType: 'application/json' }
+		generationConfig: {
+			maxOutputTokens: 16384,
+			responseMimeType: 'application/json',
+			thinkingConfig: { thinkingBudget: 0 },
+		}
 	});
+	console.log(`[Percepta:perf] callGeminiWithFindings body size: ${(body.length / 1024).toFixed(1)} KB`);
 
 	const RETRYABLE = new Set([429, 500, 502, 503, 504]);
 	let lastErr = /** @type {Error | null} */ (null);
@@ -354,11 +360,15 @@ For each selected image, return an object with:
 		if (attempt > 0) {
 			await new Promise(r => setTimeout(r, 4000 * Math.pow(3, attempt - 1)));
 		}
+		const _attemptT = Date.now();
+		console.log(`[Percepta:perf] callGeminiWithFindings attempt ${attempt + 1}/3 — sending request (${findings.length} findings)...`);
 		const response = await fetch(geminiUrl, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body
+			body,
+			signal: AbortSignal.timeout(90_000),
 		});
+		console.log(`[Percepta:perf] callGeminiWithFindings attempt ${attempt + 1}/3 — response ${response.status} in ${Date.now() - _attemptT}ms`);
 		if (response.ok) {
 			const data = await response.json();
 			const text = data.candidates?.[0]?.content?.parts
@@ -374,16 +384,16 @@ For each selected image, return an object with:
 					const captionMap = new Map();
 					for (const item of rawImages) {
 						if (item && typeof item === 'object' && typeof item.src === 'string' && BOOK_IMAGE_MAP[item.src]) {
-							captionMap.set(item.src, item.caption || BOOK_IMAGE_MAP[item.src].desc);
+							captionMap.set(item.src, item.caption || cleanCaption(BOOK_IMAGE_MAP[item.src].desc));
 						} else if (typeof item === 'string' && BOOK_IMAGE_MAP[item]) {
-							captionMap.set(item, BOOK_IMAGE_MAP[item].desc);
+							captionMap.set(item, cleanCaption(BOOK_IMAGE_MAP[item].desc));
 						}
 					}
 					// Auto-add missing pair partners
 					for (const src of [...captionMap.keys()]) {
 						const partner = BOOK_IMAGE_MAP[src].pair;
 						if (partner && BOOK_IMAGE_MAP[partner] && !captionMap.has(partner)) {
-							captionMap.set(partner, BOOK_IMAGE_MAP[partner].desc);
+							captionMap.set(partner, cleanCaption(BOOK_IMAGE_MAP[partner].desc));
 						}
 					}
 					const bookImages = [...captionMap.entries()].map(([src, caption]) => ({ src, caption }));
@@ -445,615 +455,705 @@ export async function POST({ request }) {
 		pageUrl = 'https://' + pageUrl;
 	}
 
-	const browser = await getBrowser();
-	const context = await browser.createBrowserContext();
-	try {
-		const page = await context.newPage();
-		await page.setViewport({ width: VP_W, height: VP_H, deviceScaleFactor: 1 });
+	const encoder = new TextEncoder();
+	/** @type {ReadableStreamDefaultController} */
+	let sse;
+	/** @param {object} evt */
+	function send(evt) { try { sse.enqueue(encoder.encode(`data: ${JSON.stringify(evt)}\n\n`)); } catch { } }
+	const stream = new ReadableStream({ start(ctrl) { sse = ctrl; } });
 
+	(async () => {
 		try {
-			await page.goto(pageUrl, { waitUntil: 'networkidle2', timeout: 25000 });
-		} catch {
-			await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-		}
+			const _t0 = Date.now();
+			const _perf = (/** @type {string} */ label) => console.log(`[Percepta:perf] ${label} +${Date.now() - _t0}ms`);
+			console.log(`[Percepta:perf] --- request start (mode=${mode}, url=${pageUrl}) ---`);
+			send({ type: 'step', step: 0 });
+			const browser = await getBrowser();
+			_perf('browser acquired');
+			const context = await browser.createBrowserContext();
+			try {
+				const page = await context.newPage();
+				await page.setViewport({ width: VP_W, height: VP_H, deviceScaleFactor: 1 });
 
-		// ── Dismiss cookie/GDPR popups ────────────────────────────────────────
-		// 1. Click common "accept" buttons by visible text
-		await page.evaluate(async () => {
-			const ACCEPT_TEXTS = [
-				'accept all', 'accept cookies', 'agree', 'i agree', 'allow all',
-				'allow cookies', 'got it', 'ok', 'okay', 'continue', 'close',
-				'zustimmen', 'alle akzeptieren', 'akzeptieren',  // German
-				'tout accepter', 'accepter', 'fermer',            // French
-				'acceptar', 'aceptar todas',                      // Spanish
-			];
-			const buttons = Array.from(document.querySelectorAll(
-				'button, [role="button"], a[href="#"], input[type="button"], input[type="submit"]'
-			));
-			for (const btn of buttons) {
-				const text = (btn.textContent ?? '').trim().toLowerCase();
-				if (ACCEPT_TEXTS.some(t => text.includes(t))) {
+				try {
+					await page.goto(pageUrl, { waitUntil: 'networkidle2', timeout: 25000 });
+				} catch {
+					await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+				}
+				_perf('page loaded');
+
+				// ── Dismiss cookie/GDPR popups ────────────────────────────────────────
+				// 1. Click common "accept" buttons by visible text
+				await page.evaluate(async () => {
+					const ACCEPT_TEXTS = [
+						'accept all', 'accept cookies', 'agree', 'i agree', 'allow all',
+						'allow cookies', 'got it', 'ok', 'okay', 'continue', 'close',
+						'zustimmen', 'alle akzeptieren', 'akzeptieren',  // German
+						'tout accepter', 'accepter', 'fermer',            // French
+						'acceptar', 'aceptar todas',                      // Spanish
+					];
+					const buttons = Array.from(document.querySelectorAll(
+						'button, [role="button"], a[href="#"], input[type="button"], input[type="submit"]'
+					));
+					for (const btn of buttons) {
+						const text = (btn.textContent ?? '').trim().toLowerCase();
+						if (ACCEPT_TEXTS.some(t => text.includes(t))) {
 					/** @type {HTMLElement} */ (btn).click();
-					await new Promise(r => setTimeout(r, 150));
-					break;
-				}
-			}
-		});
-
-		// 2. Remove remaining popups — specific known frameworks + safe heuristics only
-		await page.evaluate(() => {
-			const KNOWN_SELECTORS = [
-				// OneTrust
-				'#onetrust-consent-sdk', '#onetrust-banner-sdk', '#onetrust-pc-sdk',
-				// Cookiebot
-				'#CybotCookiebotDialog', '#CybotCookiebotDialogBodyUnderlay',
-				// Cookie Consent (insites)
-				'.cc-window', '#cc-main', '.cc-banner', '.cc-dialog',
-				// Cookie Notice / Cookie Law Info (WordPress plugins)
-				'#cookie-notice', '.cookie-notice',
-				'#cookie-law-info-bar', '.cli-bar-container',
-				// cookieyes / termly / usercentrics
-				'#cookieyes-banner', '.cky-consent-container',
-				'#termly-code-snippet-support', '.t-gdpr-banner',
-				'[id^="uc-banner"]', '[id^="usercentrics-"]',
-				// Borlabs Cookie (WordPress)
-				'#BorlabsCookieBox', '.borlabs-cookie-box',
-				// Generic but precise compound selectors (id/class must contain both words)
-				'[id="cookie-popup"]', '[id="cookie-banner"]', '[id="cookie-bar"]',
-				'[id="gdpr-banner"]', '[id="gdpr-overlay"]', '[id="gdpr-popup"]',
-				'[id="consent-banner"]', '[id="consent-popup"]',
-				'[id="privacy-banner"]', '[id="privacy-popup"]',
-			];
-			for (const sel of KNOWN_SELECTORS) {
-				document.querySelectorAll(sel).forEach(el => {
-					/** @type {HTMLElement} */ (el).style.display = 'none';
+							await new Promise(r => setTimeout(r, 150));
+							break;
+						}
+					}
 				});
-			}
 
-			// Heuristic: full-page backdrops and bottom cookie bars
-			const vw = window.innerWidth;
-			const vh = window.innerHeight;
-			document.querySelectorAll('*').forEach(el => {
-				const style = window.getComputedStyle(el);
-				if (style.position !== 'fixed' && style.position !== 'absolute') return;
-				if ((parseInt(style.zIndex) || 0) < 100) return;
-				const r = el.getBoundingClientRect();
-				const isFullBackdrop = r.width >= vw * 0.85 && r.height >= vh * 0.85;
-				const isBottomCookieBar = r.width >= vw * 0.85 && r.height <= 280
-					&& r.bottom >= vh * 0.75 && style.position === 'fixed';
-				if (isFullBackdrop || isBottomCookieBar) {
+				// 2. Remove remaining popups — specific known frameworks + safe heuristics only
+				await page.evaluate(() => {
+					const KNOWN_SELECTORS = [
+						// OneTrust
+						'#onetrust-consent-sdk', '#onetrust-banner-sdk', '#onetrust-pc-sdk',
+						// Cookiebot
+						'#CybotCookiebotDialog', '#CybotCookiebotDialogBodyUnderlay',
+						// Cookie Consent (insites)
+						'.cc-window', '#cc-main', '.cc-banner', '.cc-dialog',
+						// Cookie Notice / Cookie Law Info (WordPress plugins)
+						'#cookie-notice', '.cookie-notice',
+						'#cookie-law-info-bar', '.cli-bar-container',
+						// cookieyes / termly / usercentrics
+						'#cookieyes-banner', '.cky-consent-container',
+						'#termly-code-snippet-support', '.t-gdpr-banner',
+						'[id^="uc-banner"]', '[id^="usercentrics-"]',
+						// Borlabs Cookie (WordPress)
+						'#BorlabsCookieBox', '.borlabs-cookie-box',
+						// Generic but precise compound selectors (id/class must contain both words)
+						'[id="cookie-popup"]', '[id="cookie-banner"]', '[id="cookie-bar"]',
+						'[id="gdpr-banner"]', '[id="gdpr-overlay"]', '[id="gdpr-popup"]',
+						'[id="consent-banner"]', '[id="consent-popup"]',
+						'[id="privacy-banner"]', '[id="privacy-popup"]',
+					];
+					for (const sel of KNOWN_SELECTORS) {
+						document.querySelectorAll(sel).forEach(el => {
 					/** @type {HTMLElement} */ (el).style.display = 'none';
-				}
-			});
-
-			// Re-enable body scroll that popups often lock
-			document.body.style.overflow = '';
-			document.documentElement.style.overflow = '';
-		});
-
-		// Small pause so any close animations complete before screenshot
-		await new Promise(r => setTimeout(r, 300));
-
-		const screenshotBuf = await page.screenshot({
-			type: 'png',
-			clip: { x: 0, y: 0, width: VP_W, height: VP_H }
-		});
-		const screenshotB64 = Buffer.from(screenshotBuf).toString('base64');
-		const screenshotDataUrl = `data:image/png;base64,${screenshotB64}`;
-
-		// ── Extract and analyze CSS, HTML, and JavaScript ──────────────────────
-		const cssAnalysis = await extractAndAnalyzeCSS(page);
-		const htmlAnalysis = await extractAndAnalyzeHTML(page);
-		const jsAnalysis = await extractAndAnalyzeJS(page);
-
-		if (mode === 'algo') {
-			const { elements, vpW, vpH } = await page.evaluate(() => {
-				/**
-				 * @param {string} str
-				 * @returns {number[]}
-				 */
-				function parseColor(str) {
-					if (!str || str === 'transparent') return [255, 255, 255, 0];
-					const m = str.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
-					if (!m) return [128, 128, 128, 1];
-					return [+m[1], +m[2], +m[3], m[4] !== undefined ? +m[4] : 1];
-				}
-
-				/**
-				 * @param {Element} el
-				 * @returns {number[]}
-				 */
-				function getEffectiveBg(el) {
-					let cur = el;
-					while (cur && cur !== document.documentElement) {
-						const bg = window.getComputedStyle(cur).backgroundColor;
-						const parsed = parseColor(bg);
-						if (parsed[3] > 0.05) return parsed;
-						cur = /** @type {Element} */ (cur.parentElement);
+						});
 					}
-					return [255, 255, 255, 1];
-				}
 
-				const all = Array.from(document.querySelectorAll('*'));
-				const vW = window.innerWidth;
-				const vH = window.innerHeight;
-				const TEXT_TAGS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span', 'a', 'li', 'label', 'button', 'td', 'th', 'caption']);
-				const INTERACTIVE_TAGS = new Set(['a', 'button', 'input', 'select', 'textarea']);
-				/** @type {any[]} */
-				const results = [];
-				for (const el of all) {
-					const r = el.getBoundingClientRect();
-					if (r.width < 2 || r.height < 2) continue;
-					if (r.bottom < 0 || r.top > vH || r.right < 0 || r.left > vW) continue;
-					const cs = window.getComputedStyle(el);
-					const tag = el.tagName.toLowerCase();
-					results.push({
-						tag,
-						rect: { x: Math.round(Math.max(r.left, 0)), y: Math.round(Math.max(r.top, 0)), w: Math.round(Math.min(r.right, vW) - Math.max(r.left, 0)), h: Math.round(Math.min(r.bottom, vH) - Math.max(r.top, 0)) },
-						color: parseColor(cs.color),
-						bg: getEffectiveBg(el),
-						fontSize: parseFloat(cs.fontSize) || 14,
-						fontWeight: parseInt(cs.fontWeight) || 400,
-						lineHeight: parseFloat(cs.lineHeight) || 0,
-						fontFamily: (cs.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase(),
-						textAlign: cs.textAlign || 'left',
-						textDecoration: (cs.textDecorationLine && cs.textDecorationLine !== 'none')
-							? cs.textDecorationLine
-							: ((cs.textDecoration || '').includes('underline') ? 'underline' : 'none'),
-						letterSpacing: parseFloat(cs.letterSpacing) || 0,
-						paddingTop: parseFloat(cs.paddingTop) || 0,
-						paddingBottom: parseFloat(cs.paddingBottom) || 0,
-						paddingLeft: parseFloat(cs.paddingLeft) || 0,
-						paddingRight: parseFloat(cs.paddingRight) || 0,
-						hasShadow: !!cs.boxShadow && cs.boxShadow !== 'none',
-						boxShadow: (cs.boxShadow && cs.boxShadow !== 'none') ? cs.boxShadow : '',
-						zIndex: cs.zIndex === 'auto' ? 0 : (parseInt(cs.zIndex) || 0),
-						borderWidth: Math.max(
-							parseFloat(cs.borderTopWidth) || 0,
-							parseFloat(cs.borderRightWidth) || 0,
-							parseFloat(cs.borderBottomWidth) || 0,
-							parseFloat(cs.borderLeftWidth) || 0
-						),
-						textTransform: cs.textTransform || 'none',
-						hasBackgroundImage: !!cs.backgroundImage && cs.backgroundImage !== 'none',
-						opacity: parseFloat(cs.opacity) || 1,
-						isText: TEXT_TAGS.has(tag),
-						isInteractive: INTERACTIVE_TAGS.has(tag),
-						textContent: (TEXT_TAGS.has(tag) || INTERACTIVE_TAGS.has(tag))
-							? (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80)
-							: '',
-						alt: tag === 'img' ? (el.getAttribute('alt') || '').trim() : '',
+					// Heuristic: full-page backdrops and bottom cookie bars
+					const vw = window.innerWidth;
+					const vh = window.innerHeight;
+					const CONSENT_KEYWORDS = /cookie|consent|gdpr|privacy|datenschutz|accept|agree|opt.?in/i;
+					document.querySelectorAll('*').forEach(el => {
+						const style = window.getComputedStyle(el);
+						if (style.position !== 'fixed' && style.position !== 'absolute') return;
+						if ((parseInt(style.zIndex) || 0) < 100) return;
+						const r = el.getBoundingClientRect();
+						const isFullCoverage = r.width >= vw * 0.85 && r.height >= vh * 0.85;
+						const isBottomCookieBar = r.width >= vw * 0.85 && r.height <= 280
+							&& r.bottom >= vh * 0.75 && style.position === 'fixed';
+
+						if (isFullCoverage) {
+							// Only remove if it looks like a consent/GDPR backdrop:
+							// either semi-transparent background (typical dark overlay) or contains consent keywords.
+							// Genuine design popups (login walls, welcome modals) are left intact so they
+							// can be analysed as part of the page design.
+							const bg = style.backgroundColor;
+							const alpha = parseFloat((bg.match(/rgba?\([^)]+,\s*([\d.]+)\)/) || [])[1] ?? '1');
+							const isSemiTransparent = alpha < 0.85;
+							const text = /** @type {HTMLElement} */ (el).innerText || '';
+							const hasConsentText = CONSENT_KEYWORDS.test(text);
+							if (isSemiTransparent || hasConsentText) {
+						/** @type {HTMLElement} */ (el).style.display = 'none';
+							}
+						} else if (isBottomCookieBar) {
+					/** @type {HTMLElement} */ (el).style.display = 'none';
+						}
+					});
+
+					// Re-enable body scroll that popups often lock
+					document.body.style.overflow = '';
+					document.documentElement.style.overflow = '';
+				});
+
+				// Small pause so any close animations complete before screenshot
+				await new Promise(r => setTimeout(r, 300));
+				_perf('cookies dismissed, taking screenshot');
+				send({ type: 'step', step: 1 });
+				const screenshotBuf = await page.screenshot({
+					type: 'png',
+					clip: { x: 0, y: 0, width: VP_W, height: VP_H }
+				});
+				const screenshotB64 = Buffer.from(screenshotBuf).toString('base64');
+				const screenshotDataUrl = `data:image/png;base64,${screenshotB64}`;
+				_perf('screenshot captured');
+
+				// ── Extract and analyze CSS, HTML, and JavaScript ──────────────────────
+				send({ type: 'step', step: 2 });
+				const cssAnalysis = await extractAndAnalyzeCSS(page);
+				const htmlAnalysis = await extractAndAnalyzeHTML(page);
+				const jsAnalysis = await extractAndAnalyzeJS(page);
+				cssAnalysis.findings = cssAnalysis.findings.map((f, i) => ({ id: `CSS${String(i + 1).padStart(3, '0')}`, ...f }));
+				htmlAnalysis.findings = htmlAnalysis.findings.map((f, i) => ({ id: `HTML${String(i + 1).padStart(3, '0')}`, ...f }));
+				jsAnalysis.findings = jsAnalysis.findings.map((f, i) => ({ id: `JS${String(i + 1).padStart(3, '0')}`, ...f }));
+				_perf('css/html/js extracted');
+
+				if (mode === 'algo') {
+					send({ type: 'step', step: 3 });
+					const { elements, vpW, vpH } = await page.evaluate(() => {
+						/**
+						 * @param {string} str
+						 * @returns {number[]}
+						 */
+						function parseColor(str) {
+							if (!str || str === 'transparent') return [255, 255, 255, 0];
+							const m = str.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+							if (!m) return [128, 128, 128, 1];
+							return [+m[1], +m[2], +m[3], m[4] !== undefined ? +m[4] : 1];
+						}
+
+						/**
+						 * @param {Element} el
+						 * @returns {number[]}
+						 */
+						function getEffectiveBg(el) {
+							let cur = el;
+							while (cur && cur !== document.documentElement) {
+								const bg = window.getComputedStyle(cur).backgroundColor;
+								const parsed = parseColor(bg);
+								if (parsed[3] > 0.05) return parsed;
+								cur = /** @type {Element} */ (cur.parentElement);
+							}
+							return [255, 255, 255, 1];
+						}
+
+						const all = Array.from(document.querySelectorAll('*'));
+						const vW = window.innerWidth;
+						const vH = window.innerHeight;
+						const TEXT_TAGS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span', 'a', 'li', 'label', 'button', 'td', 'th', 'caption']);
+						const INTERACTIVE_TAGS = new Set(['a', 'button', 'input', 'select', 'textarea']);
+						/** @type {any[]} */
+						const results = [];
+						for (const el of all) {
+							const r = el.getBoundingClientRect();
+							if (r.width < 2 || r.height < 2) continue;
+							if (r.bottom < 0 || r.top > vH || r.right < 0 || r.left > vW) continue;
+							const cs = window.getComputedStyle(el);
+							const tag = el.tagName.toLowerCase();
+							results.push({
+								tag,
+								rect: { x: Math.round(Math.max(r.left, 0)), y: Math.round(Math.max(r.top, 0)), w: Math.round(Math.min(r.right, vW) - Math.max(r.left, 0)), h: Math.round(Math.min(r.bottom, vH) - Math.max(r.top, 0)) },
+								color: parseColor(cs.color),
+								bg: getEffectiveBg(el),
+								fontSize: parseFloat(cs.fontSize) || 14,
+								fontWeight: parseInt(cs.fontWeight) || 400,
+								lineHeight: parseFloat(cs.lineHeight) || 0,
+								fontFamily: (cs.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase(),
+								textAlign: cs.textAlign || 'left',
+								textDecoration: (cs.textDecorationLine && cs.textDecorationLine !== 'none')
+									? cs.textDecorationLine
+									: ((cs.textDecoration || '').includes('underline') ? 'underline' : 'none'),
+								letterSpacing: parseFloat(cs.letterSpacing) || 0,
+								paddingTop: parseFloat(cs.paddingTop) || 0,
+								paddingBottom: parseFloat(cs.paddingBottom) || 0,
+								paddingLeft: parseFloat(cs.paddingLeft) || 0,
+								paddingRight: parseFloat(cs.paddingRight) || 0,
+								hasShadow: !!cs.boxShadow && cs.boxShadow !== 'none',
+								boxShadow: (cs.boxShadow && cs.boxShadow !== 'none') ? cs.boxShadow : '',
+								zIndex: cs.zIndex === 'auto' ? 0 : (parseInt(cs.zIndex) || 0),
+								borderWidth: Math.max(
+									parseFloat(cs.borderTopWidth) || 0,
+									parseFloat(cs.borderRightWidth) || 0,
+									parseFloat(cs.borderBottomWidth) || 0,
+									parseFloat(cs.borderLeftWidth) || 0
+								),
+								textTransform: cs.textTransform || 'none',
+								hasBackgroundImage: !!cs.backgroundImage && cs.backgroundImage !== 'none',
+								opacity: parseFloat(cs.opacity) || 1,
+								isText: TEXT_TAGS.has(tag),
+								isInteractive: INTERACTIVE_TAGS.has(tag),
+								textContent: (TEXT_TAGS.has(tag) || INTERACTIVE_TAGS.has(tag))
+									? (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80)
+									: '',
+								alt: tag === 'img' ? (el.getAttribute('alt') || '').trim() : '',
+							});
+						}
+						return { elements: results, vpW: vW, vpH: vH };
+					});
+
+					const analysis = analyseAlgorithmically(elements, vpW, vpH);
+					_perf('algorithmic analysis done (algo mode)');
+
+					// Merge all analysis findings and strengths
+					const allFindings = [
+						...analysis.findings,
+						...cssAnalysis.findings,
+						...htmlAnalysis.findings,
+						...jsAnalysis.findings,
+					];
+					const allStrengths = [
+						...analysis.strengths,
+						...cssAnalysis.strengths,
+						...htmlAnalysis.strengths,
+						...jsAnalysis.strengths,
+					];
+
+					send({ type: 'step', step: 7 });
+					send({
+						type: 'done', result: {
+							screenshot: screenshotDataUrl,
+							...analysis,
+							findings: allFindings,
+							strengths: allStrengths,
+						}
+					});
+				} else if (mode === 'algo-ai') {
+					// algo-ai: run rule-based analysis, then ask AI to rewrite findings in plain language
+					send({ type: 'step', step: 3 });
+					const { elements, vpW, vpH } = await page.evaluate(() => {
+						/**
+						 * @param {string} str
+						 * @returns {number[]}
+						 */
+						function parseColor(str) {
+							if (!str || str === 'transparent') return [255, 255, 255, 0];
+							const m = str.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+							if (!m) return [128, 128, 128, 1];
+							return [+m[1], +m[2], +m[3], m[4] !== undefined ? +m[4] : 1];
+						}
+
+						/**
+						 * @param {Element} el
+						 * @returns {number[]}
+						 */
+						function getEffectiveBg(el) {
+							let cur = el;
+							while (cur && cur !== document.documentElement) {
+								const bg = window.getComputedStyle(cur).backgroundColor;
+								const parsed = parseColor(bg);
+								if (parsed[3] > 0.05) return parsed;
+								cur = /** @type {Element} */ (cur.parentElement);
+							}
+							return [255, 255, 255, 1];
+						}
+
+						const all = Array.from(document.querySelectorAll('*'));
+						const vW = window.innerWidth;
+						const vH = window.innerHeight;
+						const TEXT_TAGS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span', 'a', 'li', 'label', 'button', 'td', 'th', 'caption']);
+						const INTERACTIVE_TAGS = new Set(['a', 'button', 'input', 'select', 'textarea']);
+						/** @type {any[]} */
+						const results = [];
+						for (const el of all) {
+							const r = el.getBoundingClientRect();
+							if (r.width < 2 || r.height < 2) continue;
+							if (r.bottom < 0 || r.top > vH || r.right < 0 || r.left > vW) continue;
+							const cs = window.getComputedStyle(el);
+							const tag = el.tagName.toLowerCase();
+							results.push({
+								tag,
+								rect: { x: Math.round(Math.max(r.left, 0)), y: Math.round(Math.max(r.top, 0)), w: Math.round(Math.min(r.right, vW) - Math.max(r.left, 0)), h: Math.round(Math.min(r.bottom, vH) - Math.max(r.top, 0)) },
+								color: parseColor(cs.color),
+								bg: getEffectiveBg(el),
+								fontSize: parseFloat(cs.fontSize) || 14,
+								fontWeight: parseInt(cs.fontWeight) || 400,
+								lineHeight: parseFloat(cs.lineHeight) || 0,
+								fontFamily: (cs.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase(),
+								textAlign: cs.textAlign || 'left',
+								textDecoration: (cs.textDecorationLine && cs.textDecorationLine !== 'none')
+									? cs.textDecorationLine
+									: ((cs.textDecoration || '').includes('underline') ? 'underline' : 'none'),
+								letterSpacing: parseFloat(cs.letterSpacing) || 0,
+								paddingTop: parseFloat(cs.paddingTop) || 0,
+								paddingBottom: parseFloat(cs.paddingBottom) || 0,
+								paddingLeft: parseFloat(cs.paddingLeft) || 0,
+								paddingRight: parseFloat(cs.paddingRight) || 0,
+								hasShadow: !!cs.boxShadow && cs.boxShadow !== 'none',
+								boxShadow: (cs.boxShadow && cs.boxShadow !== 'none') ? cs.boxShadow : '',
+								zIndex: cs.zIndex === 'auto' ? 0 : (parseInt(cs.zIndex) || 0),
+								borderWidth: Math.max(
+									parseFloat(cs.borderTopWidth) || 0,
+									parseFloat(cs.borderRightWidth) || 0,
+									parseFloat(cs.borderBottomWidth) || 0,
+									parseFloat(cs.borderLeftWidth) || 0
+								),
+								textTransform: cs.textTransform || 'none',
+								hasBackgroundImage: !!cs.backgroundImage && cs.backgroundImage !== 'none',
+								opacity: parseFloat(cs.opacity) || 1,
+								isText: TEXT_TAGS.has(tag),
+								isInteractive: INTERACTIVE_TAGS.has(tag),
+								textContent: (TEXT_TAGS.has(tag) || INTERACTIVE_TAGS.has(tag))
+									? (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80)
+									: '',
+								alt: tag === 'img' ? (el.getAttribute('alt') || '').trim() : '',
+							});
+						}
+						return { elements: results, vpW: vW, vpH: vH };
+					});
+
+					const algoAnalysis = analyseAlgorithmically(elements, vpW, vpH);
+					_perf('algorithmic analysis done (algo-ai mode)');
+					send({ type: 'step', step: 4 });
+					let aiRewrite = null;
+					try {
+						// Merge algorithmic findings with CSS/HTML/JS findings before AI rewrite
+						const mergedFindings = [
+							...algoAnalysis.findings,
+							...cssAnalysis.findings,
+							...htmlAnalysis.findings,
+							...jsAnalysis.findings,
+						];
+						const codeContext = {
+							css: cssAnalysis.cssData,
+							html: htmlAnalysis.htmlData,
+							js: jsAnalysis.jsData,
+						};
+						_perf('calling Gemini (algo-ai rewrite)...');
+						aiRewrite = await callGeminiWithFindings(apiKey, mergedFindings, algoAnalysis.overallScore, codeContext);
+						_perf('Gemini algo-ai rewrite done');
+					} catch (aiErr) {
+						console.warn('[Percepta] Gemini unavailable, falling back to algorithmic results:', aiErr.message);
+					}
+
+					send({ type: 'step', step: 6 });
+					const allStrengths = [
+						...(aiRewrite?.strengths ?? algoAnalysis.strengths),
+						...cssAnalysis.strengths,
+						...htmlAnalysis.strengths,
+						...jsAnalysis.strengths,
+					];
+
+					const noImages = aiRewrite !== null &&
+						aiRewrite.findings.every(f => (f.bookImages ?? []).length === 0);
+
+					send({
+						type: 'done', result: {
+							screenshot: screenshotDataUrl,
+							overallScore: algoAnalysis.overallScore,
+							summary: aiRewrite?.summary ?? algoAnalysis.summary,
+							findings: aiRewrite?.findings ?? [
+								...algoAnalysis.findings,
+								...cssAnalysis.findings,
+								...htmlAnalysis.findings,
+								...jsAnalysis.findings,
+							],
+							strengths: allStrengths,
+							expertNote: algoAnalysis.expertNote,
+							aiUnavailable: aiRewrite === null,
+							noImages,
+						}
+					});
+				} else if (mode === 'compare-algo-ai') {
+					// compare-algo-ai: run algo, then ask AI to rewrite — return both for prose diff view
+					send({ type: 'step', step: 3 });
+					const { elements, vpW, vpH } = await page.evaluate(() => {
+						/** @param {string} str @returns {number[]} */
+						function parseColor(str) {
+							if (!str || str === 'transparent') return [255, 255, 255, 0];
+							const m = str.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+							if (!m) return [128, 128, 128, 1];
+							return [+m[1], +m[2], +m[3], m[4] !== undefined ? +m[4] : 1];
+						}
+						/** @param {Element} el @returns {number[]} */
+						function getEffectiveBg(el) {
+							let cur = el;
+							while (cur && cur !== document.documentElement) {
+								const bg = window.getComputedStyle(cur).backgroundColor;
+								const parsed = parseColor(bg);
+								if (parsed[3] > 0.05) return parsed;
+								cur = /** @type {Element} */ (cur.parentElement);
+							}
+							return [255, 255, 255, 1];
+						}
+						const all = Array.from(document.querySelectorAll('*'));
+						const vW = window.innerWidth;
+						const vH = window.innerHeight;
+						const TEXT_TAGS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span', 'a', 'li', 'label', 'button', 'td', 'th', 'caption']);
+						const INTERACTIVE_TAGS = new Set(['a', 'button', 'input', 'select', 'textarea']);
+						/** @type {any[]} */
+						const results = [];
+						for (const el of all) {
+							const r = el.getBoundingClientRect();
+							if (r.width < 2 || r.height < 2) continue;
+							if (r.bottom < 0 || r.top > vH || r.right < 0 || r.left > vW) continue;
+							const cs = window.getComputedStyle(el);
+							const tag = el.tagName.toLowerCase();
+							results.push({
+								tag,
+								rect: { x: Math.round(Math.max(r.left, 0)), y: Math.round(Math.max(r.top, 0)), w: Math.round(Math.min(r.right, vW) - Math.max(r.left, 0)), h: Math.round(Math.min(r.bottom, vH) - Math.max(r.top, 0)) },
+								color: parseColor(cs.color),
+								bg: getEffectiveBg(el),
+								fontSize: parseFloat(cs.fontSize) || 14,
+								fontWeight: parseInt(cs.fontWeight) || 400,
+								lineHeight: parseFloat(cs.lineHeight) || 0,
+								fontFamily: (cs.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase(),
+								textAlign: cs.textAlign || 'left',
+								textDecoration: (cs.textDecorationLine && cs.textDecorationLine !== 'none')
+									? cs.textDecorationLine
+									: ((cs.textDecoration || '').includes('underline') ? 'underline' : 'none'),
+								letterSpacing: parseFloat(cs.letterSpacing) || 0,
+								paddingTop: parseFloat(cs.paddingTop) || 0,
+								paddingBottom: parseFloat(cs.paddingBottom) || 0,
+								paddingLeft: parseFloat(cs.paddingLeft) || 0,
+								paddingRight: parseFloat(cs.paddingRight) || 0,
+								hasShadow: !!cs.boxShadow && cs.boxShadow !== 'none',
+								boxShadow: (cs.boxShadow && cs.boxShadow !== 'none') ? cs.boxShadow : '',
+								zIndex: cs.zIndex === 'auto' ? 0 : (parseInt(cs.zIndex) || 0),
+								borderWidth: Math.max(
+									parseFloat(cs.borderTopWidth) || 0,
+									parseFloat(cs.borderRightWidth) || 0,
+									parseFloat(cs.borderBottomWidth) || 0,
+									parseFloat(cs.borderLeftWidth) || 0
+								),
+								textTransform: cs.textTransform || 'none',
+								hasBackgroundImage: !!cs.backgroundImage && cs.backgroundImage !== 'none',
+								opacity: parseFloat(cs.opacity) || 1,
+								isText: TEXT_TAGS.has(tag),
+								isInteractive: INTERACTIVE_TAGS.has(tag),
+								textContent: (TEXT_TAGS.has(tag) || INTERACTIVE_TAGS.has(tag))
+									? (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80)
+									: '',
+								alt: tag === 'img' ? (el.getAttribute('alt') || '').trim() : '',
+							});
+						}
+						return { elements: results, vpW: vW, vpH: vH };
+					});
+
+					const algoResult = analyseAlgorithmically(elements, vpW, vpH);
+					_perf('algorithmic analysis done (compare-algo-ai mode)');
+					send({ type: 'step', step: 4 });
+					let aiRewrite = null;
+					try {
+						// Merge algorithmic findings with CSS/HTML/JS findings before AI rewrite
+						const mergedFindings = [
+							...algoResult.findings,
+							...cssAnalysis.findings,
+							...htmlAnalysis.findings,
+							...jsAnalysis.findings,
+						];
+						const codeContext = {
+							css: cssAnalysis.cssData,
+							html: htmlAnalysis.htmlData,
+							js: jsAnalysis.jsData,
+						};
+						_perf('calling Gemini (compare-algo-ai rewrite)...');
+						aiRewrite = await callGeminiWithFindings(apiKey, mergedFindings, algoResult.overallScore, codeContext);
+						_perf('Gemini compare-algo-ai rewrite done');
+					} catch (aiErr) {
+						console.warn('[Percepta] Gemini unavailable, falling back to algorithmic results:', aiErr.message);
+					}
+
+					send({ type: 'step', step: 6 });
+					// Merge algo findings with CSS/HTML/JS findings for the "algo" side
+					const algoWithExtensions = {
+						...algoResult,
+						findings: [
+							...algoResult.findings,
+							...cssAnalysis.findings,
+							...htmlAnalysis.findings,
+							...jsAnalysis.findings,
+						],
+						strengths: [
+							...algoResult.strengths,
+							...cssAnalysis.strengths,
+							...htmlAnalysis.strengths,
+							...jsAnalysis.strengths,
+						],
+					};
+
+					const noImages = aiRewrite !== null &&
+						aiRewrite.findings.every(f => (f.bookImages ?? []).length === 0);
+
+					send({
+						type: 'done', result: {
+							mode: 'compare-algo-ai',
+							screenshot: screenshotDataUrl,
+							overallScore: algoResult.overallScore,
+							algo: algoWithExtensions,
+							algoAi: {
+								summary: aiRewrite?.summary ?? algoResult.summary,
+								findings: aiRewrite?.findings ?? algoWithExtensions.findings,
+								strengths: aiRewrite?.strengths ?? algoWithExtensions.strengths,
+							},
+							aiUnavailable: aiRewrite === null,
+							noImages,
+						}
+					});
+				} else if (mode === 'ai') {
+					// AI mode - pass code context for better analysis
+					send({ type: 'step', step: 3 });
+					const codeContext = {
+						css: cssAnalysis.cssData,
+						html: htmlAnalysis.htmlData,
+						js: jsAnalysis.jsData,
+					};
+					_perf('calling Gemini (ai mode)...');
+					const result = await callGemini(apiKey, screenshotB64, codeContext);
+					_perf('Gemini ai mode done');
+					send({
+						type: 'done', result: {
+							screenshot: screenshotDataUrl,
+							...result,
+							// Add CSS/HTML/JS findings to AI results
+							findings: [
+								...(result.findings || []),
+								...cssAnalysis.findings,
+								...htmlAnalysis.findings,
+								...jsAnalysis.findings,
+							],
+							strengths: [
+								...(result.strengths || []),
+								...cssAnalysis.strengths,
+								...htmlAnalysis.strengths,
+								...jsAnalysis.strengths,
+							],
+						}
+					});
+				} else {
+					// compare mode — run both algo and AI, return side-by-side with CSS/HTML/JS analysis
+					send({ type: 'step', step: 3 });
+					const { elements, vpW, vpH } = await page.evaluate(() => {
+						/**
+						 * @param {string} str
+						 * @returns {number[]}
+						 */
+						function parseColor(str) {
+							if (!str || str === 'transparent') return [255, 255, 255, 0];
+							const m = str.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+							if (!m) return [128, 128, 128, 1];
+							return [+m[1], +m[2], +m[3], m[4] !== undefined ? +m[4] : 1];
+						}
+
+						/**
+						 * @param {Element} el
+						 * @returns {number[]}
+						 */
+						function getEffectiveBg(el) {
+							let cur = el;
+							while (cur && cur !== document.documentElement) {
+								const bg = window.getComputedStyle(cur).backgroundColor;
+								const parsed = parseColor(bg);
+								if (parsed[3] > 0.05) return parsed;
+								cur = /** @type {Element} */ (cur.parentElement);
+							}
+							return [255, 255, 255, 1];
+						}
+
+						const all = Array.from(document.querySelectorAll('*'));
+						const vW = window.innerWidth;
+						const vH = window.innerHeight;
+						const TEXT_TAGS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span', 'a', 'li', 'label', 'button', 'td', 'th', 'caption']);
+						const INTERACTIVE_TAGS = new Set(['a', 'button', 'input', 'select', 'textarea']);
+						/** @type {any[]} */
+						const results = [];
+						for (const el of all) {
+							const r = el.getBoundingClientRect();
+							if (r.width < 2 || r.height < 2) continue;
+							if (r.bottom < 0 || r.top > vH || r.right < 0 || r.left > vW) continue;
+							const cs = window.getComputedStyle(el);
+							const tag = el.tagName.toLowerCase();
+							results.push({
+								tag,
+								rect: { x: Math.round(Math.max(r.left, 0)), y: Math.round(Math.max(r.top, 0)), w: Math.round(Math.min(r.right, vW) - Math.max(r.left, 0)), h: Math.round(Math.min(r.bottom, vH) - Math.max(r.top, 0)) },
+								color: parseColor(cs.color),
+								bg: getEffectiveBg(el),
+								fontSize: parseFloat(cs.fontSize) || 14,
+								fontWeight: parseInt(cs.fontWeight) || 400,
+								lineHeight: parseFloat(cs.lineHeight) || 0,
+								fontFamily: (cs.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase(),
+								textAlign: cs.textAlign || 'left',
+								textDecoration: (cs.textDecorationLine && cs.textDecorationLine !== 'none')
+									? cs.textDecorationLine
+									: ((cs.textDecoration || '').includes('underline') ? 'underline' : 'none'),
+								letterSpacing: parseFloat(cs.letterSpacing) || 0,
+								paddingTop: parseFloat(cs.paddingTop) || 0,
+								paddingBottom: parseFloat(cs.paddingBottom) || 0,
+								paddingLeft: parseFloat(cs.paddingLeft) || 0,
+								paddingRight: parseFloat(cs.paddingRight) || 0,
+								hasShadow: !!cs.boxShadow && cs.boxShadow !== 'none',
+								boxShadow: (cs.boxShadow && cs.boxShadow !== 'none') ? cs.boxShadow : '',
+								zIndex: cs.zIndex === 'auto' ? 0 : (parseInt(cs.zIndex) || 0),
+								borderWidth: Math.max(
+									parseFloat(cs.borderTopWidth) || 0,
+									parseFloat(cs.borderRightWidth) || 0,
+									parseFloat(cs.borderBottomWidth) || 0,
+									parseFloat(cs.borderLeftWidth) || 0
+								),
+								textTransform: cs.textTransform || 'none',
+								hasBackgroundImage: !!cs.backgroundImage && cs.backgroundImage !== 'none',
+								opacity: parseFloat(cs.opacity) || 1,
+								isText: TEXT_TAGS.has(tag),
+								isInteractive: INTERACTIVE_TAGS.has(tag),
+								textContent: (TEXT_TAGS.has(tag) || INTERACTIVE_TAGS.has(tag))
+									? (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80)
+									: '',
+								alt: tag === 'img' ? (el.getAttribute('alt') || '').trim() : '',
+							});
+						}
+						return { elements: results, vpW: vW, vpH: vH };
+					});
+
+					const algoResult = analyseAlgorithmically(elements, vpW, vpH);
+					_perf('algorithmic analysis done (compare mode)');
+					send({ type: 'step', step: 4 });
+					const codeContext = {
+						css: cssAnalysis.cssData,
+						html: htmlAnalysis.htmlData,
+						js: jsAnalysis.jsData,
+					};
+					_perf('calling Gemini (compare AI analysis)...');
+					const aiResult = await callGemini(apiKey, screenshotB64, codeContext);
+					_perf('Gemini compare AI analysis done');
+					send({ type: 'step', step: 6 });
+
+					// Merge algo findings with CSS/HTML/JS findings
+					const algoWithExtensions = {
+						...algoResult,
+						findings: [
+							...algoResult.findings,
+							...cssAnalysis.findings,
+							...htmlAnalysis.findings,
+							...jsAnalysis.findings,
+						],
+						strengths: [
+							...algoResult.strengths,
+							...cssAnalysis.strengths,
+							...htmlAnalysis.strengths,
+							...jsAnalysis.strengths,
+						],
+					};
+
+					// Merge AI findings with CSS/HTML/JS findings
+					const aiWithExtensions = {
+						...aiResult,
+						findings: [
+							...(aiResult.findings || []),
+							...cssAnalysis.findings,
+							...htmlAnalysis.findings,
+							...jsAnalysis.findings,
+						],
+						strengths: [
+							...(aiResult.strengths || []),
+							...cssAnalysis.strengths,
+							...htmlAnalysis.strengths,
+							...jsAnalysis.strengths,
+						],
+					};
+
+					send({
+						type: 'done', result: {
+							mode: 'compare',
+							screenshot: screenshotDataUrl,
+							algo: algoWithExtensions,
+							ai: aiWithExtensions,
+						}
 					});
 				}
-				return { elements: results, vpW: vW, vpH: vH };
-			});
-
-			const analysis = analyseAlgorithmically(elements, vpW, vpH);
-
-			// Merge all analysis findings and strengths
-			const allFindings = [
-				...analysis.findings,
-				...cssAnalysis.findings,
-				...htmlAnalysis.findings,
-				...jsAnalysis.findings,
-			];
-			const allStrengths = [
-				...analysis.strengths,
-				...cssAnalysis.strengths,
-				...htmlAnalysis.strengths,
-				...jsAnalysis.strengths,
-			];
-
-			return json({
-				screenshot: screenshotDataUrl,
-				...analysis,
-				findings: allFindings,
-				strengths: allStrengths,
-			});
-		} else if (mode === 'algo-ai') {
-			// algo-ai: run rule-based analysis, then ask AI to rewrite findings in plain language
-			const { elements, vpW, vpH } = await page.evaluate(() => {
-				/**
-				 * @param {string} str
-				 * @returns {number[]}
-				 */
-				function parseColor(str) {
-					if (!str || str === 'transparent') return [255, 255, 255, 0];
-					const m = str.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
-					if (!m) return [128, 128, 128, 1];
-					return [+m[1], +m[2], +m[3], m[4] !== undefined ? +m[4] : 1];
-				}
-
-				/**
-				 * @param {Element} el
-				 * @returns {number[]}
-				 */
-				function getEffectiveBg(el) {
-					let cur = el;
-					while (cur && cur !== document.documentElement) {
-						const bg = window.getComputedStyle(cur).backgroundColor;
-						const parsed = parseColor(bg);
-						if (parsed[3] > 0.05) return parsed;
-						cur = /** @type {Element} */ (cur.parentElement);
-					}
-					return [255, 255, 255, 1];
-				}
-
-				const all = Array.from(document.querySelectorAll('*'));
-				const vW = window.innerWidth;
-				const vH = window.innerHeight;
-				const TEXT_TAGS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span', 'a', 'li', 'label', 'button', 'td', 'th', 'caption']);
-				const INTERACTIVE_TAGS = new Set(['a', 'button', 'input', 'select', 'textarea']);
-				/** @type {any[]} */
-				const results = [];
-				for (const el of all) {
-					const r = el.getBoundingClientRect();
-					if (r.width < 2 || r.height < 2) continue;
-					if (r.bottom < 0 || r.top > vH || r.right < 0 || r.left > vW) continue;
-					const cs = window.getComputedStyle(el);
-					const tag = el.tagName.toLowerCase();
-					results.push({
-						tag,
-						rect: { x: Math.round(Math.max(r.left, 0)), y: Math.round(Math.max(r.top, 0)), w: Math.round(Math.min(r.right, vW) - Math.max(r.left, 0)), h: Math.round(Math.min(r.bottom, vH) - Math.max(r.top, 0)) },
-						color: parseColor(cs.color),
-						bg: getEffectiveBg(el),
-						fontSize: parseFloat(cs.fontSize) || 14,
-						fontWeight: parseInt(cs.fontWeight) || 400,
-						lineHeight: parseFloat(cs.lineHeight) || 0,
-						fontFamily: (cs.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase(),
-						textAlign: cs.textAlign || 'left',
-						textDecoration: (cs.textDecorationLine && cs.textDecorationLine !== 'none')
-							? cs.textDecorationLine
-							: ((cs.textDecoration || '').includes('underline') ? 'underline' : 'none'),
-						letterSpacing: parseFloat(cs.letterSpacing) || 0,
-						paddingTop: parseFloat(cs.paddingTop) || 0,
-						paddingBottom: parseFloat(cs.paddingBottom) || 0,
-						paddingLeft: parseFloat(cs.paddingLeft) || 0,
-						paddingRight: parseFloat(cs.paddingRight) || 0,
-						hasShadow: !!cs.boxShadow && cs.boxShadow !== 'none',
-						boxShadow: (cs.boxShadow && cs.boxShadow !== 'none') ? cs.boxShadow : '',
-						zIndex: cs.zIndex === 'auto' ? 0 : (parseInt(cs.zIndex) || 0),
-						borderWidth: Math.max(
-							parseFloat(cs.borderTopWidth) || 0,
-							parseFloat(cs.borderRightWidth) || 0,
-							parseFloat(cs.borderBottomWidth) || 0,
-							parseFloat(cs.borderLeftWidth) || 0
-						),
-						textTransform: cs.textTransform || 'none',
-						hasBackgroundImage: !!cs.backgroundImage && cs.backgroundImage !== 'none',
-						opacity: parseFloat(cs.opacity) || 1,
-						isText: TEXT_TAGS.has(tag),
-						isInteractive: INTERACTIVE_TAGS.has(tag),
-						textContent: (TEXT_TAGS.has(tag) || INTERACTIVE_TAGS.has(tag))
-							? (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80)
-							: '',
-						alt: tag === 'img' ? (el.getAttribute('alt') || '').trim() : '',
-					});
-				}
-				return { elements: results, vpW: vW, vpH: vH };
-			});
-
-			const algoAnalysis = analyseAlgorithmically(elements, vpW, vpH);
-			let aiRewrite = null;
-			try {
-				// Merge algorithmic findings with CSS/HTML/JS findings before AI rewrite
-				const mergedFindings = [
-					...algoAnalysis.findings,
-					...cssAnalysis.findings,
-					...htmlAnalysis.findings,
-					...jsAnalysis.findings,
-				];
-				const codeContext = {
-					css: cssAnalysis.cssData,
-					html: htmlAnalysis.htmlData,
-					js: jsAnalysis.jsData,
-				};
-				aiRewrite = await callGeminiWithFindings(apiKey, mergedFindings, algoAnalysis.overallScore, codeContext);
-			} catch (aiErr) {
-				console.warn('[Percepta] Gemini unavailable, falling back to algorithmic results:', aiErr.message);
+			} finally {
+				await context.close();
 			}
-
-			const allStrengths = [
-				...(aiRewrite?.strengths ?? algoAnalysis.strengths),
-				...cssAnalysis.strengths,
-				...htmlAnalysis.strengths,
-				...jsAnalysis.strengths,
-			];
-
-			return json({
-				screenshot: screenshotDataUrl,
-				overallScore: algoAnalysis.overallScore,
-				summary: aiRewrite?.summary ?? algoAnalysis.summary,
-				findings: aiRewrite?.findings ?? [
-					...algoAnalysis.findings,
-					...cssAnalysis.findings,
-					...htmlAnalysis.findings,
-					...jsAnalysis.findings,
-				],
-				strengths: allStrengths,
-				expertNote: algoAnalysis.expertNote,
-			});
-		} else if (mode === 'compare-algo-ai') {
-			// compare-algo-ai: run algo, then ask AI to rewrite — return both for prose diff view
-			const { elements, vpW, vpH } = await page.evaluate(() => {
-				/** @param {string} str @returns {number[]} */
-				function parseColor(str) {
-					if (!str || str === 'transparent') return [255, 255, 255, 0];
-					const m = str.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
-					if (!m) return [128, 128, 128, 1];
-					return [+m[1], +m[2], +m[3], m[4] !== undefined ? +m[4] : 1];
-				}
-				/** @param {Element} el @returns {number[]} */
-				function getEffectiveBg(el) {
-					let cur = el;
-					while (cur && cur !== document.documentElement) {
-						const bg = window.getComputedStyle(cur).backgroundColor;
-						const parsed = parseColor(bg);
-						if (parsed[3] > 0.05) return parsed;
-						cur = /** @type {Element} */ (cur.parentElement);
-					}
-					return [255, 255, 255, 1];
-				}
-				const all = Array.from(document.querySelectorAll('*'));
-				const vW = window.innerWidth;
-				const vH = window.innerHeight;
-				const TEXT_TAGS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span', 'a', 'li', 'label', 'button', 'td', 'th', 'caption']);
-				const INTERACTIVE_TAGS = new Set(['a', 'button', 'input', 'select', 'textarea']);
-				/** @type {any[]} */
-				const results = [];
-				for (const el of all) {
-					const r = el.getBoundingClientRect();
-					if (r.width < 2 || r.height < 2) continue;
-					if (r.bottom < 0 || r.top > vH || r.right < 0 || r.left > vW) continue;
-					const cs = window.getComputedStyle(el);
-					const tag = el.tagName.toLowerCase();
-					results.push({
-						tag,
-						rect: { x: Math.round(Math.max(r.left, 0)), y: Math.round(Math.max(r.top, 0)), w: Math.round(Math.min(r.right, vW) - Math.max(r.left, 0)), h: Math.round(Math.min(r.bottom, vH) - Math.max(r.top, 0)) },
-						color: parseColor(cs.color),
-						bg: getEffectiveBg(el),
-						fontSize: parseFloat(cs.fontSize) || 14,
-						fontWeight: parseInt(cs.fontWeight) || 400,
-						lineHeight: parseFloat(cs.lineHeight) || 0,
-						fontFamily: (cs.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase(),
-						textAlign: cs.textAlign || 'left',
-						textDecoration: (cs.textDecorationLine && cs.textDecorationLine !== 'none')
-							? cs.textDecorationLine
-							: ((cs.textDecoration || '').includes('underline') ? 'underline' : 'none'),
-						letterSpacing: parseFloat(cs.letterSpacing) || 0,
-						paddingTop: parseFloat(cs.paddingTop) || 0,
-						paddingBottom: parseFloat(cs.paddingBottom) || 0,
-						paddingLeft: parseFloat(cs.paddingLeft) || 0,
-						paddingRight: parseFloat(cs.paddingRight) || 0,
-						hasShadow: !!cs.boxShadow && cs.boxShadow !== 'none',
-						boxShadow: (cs.boxShadow && cs.boxShadow !== 'none') ? cs.boxShadow : '',
-						zIndex: cs.zIndex === 'auto' ? 0 : (parseInt(cs.zIndex) || 0),
-						borderWidth: Math.max(
-							parseFloat(cs.borderTopWidth) || 0,
-							parseFloat(cs.borderRightWidth) || 0,
-							parseFloat(cs.borderBottomWidth) || 0,
-							parseFloat(cs.borderLeftWidth) || 0
-						),
-						textTransform: cs.textTransform || 'none',
-						hasBackgroundImage: !!cs.backgroundImage && cs.backgroundImage !== 'none',
-						opacity: parseFloat(cs.opacity) || 1,
-						isText: TEXT_TAGS.has(tag),
-						isInteractive: INTERACTIVE_TAGS.has(tag),
-						textContent: (TEXT_TAGS.has(tag) || INTERACTIVE_TAGS.has(tag))
-							? (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80)
-							: '',
-						alt: tag === 'img' ? (el.getAttribute('alt') || '').trim() : '',
-					});
-				}
-				return { elements: results, vpW: vW, vpH: vH };
-			});
-
-			const algoResult = analyseAlgorithmically(elements, vpW, vpH);
-			let aiRewrite = null;
-			try {
-				// Merge algorithmic findings with CSS/HTML/JS findings before AI rewrite
-				const mergedFindings = [
-					...algoResult.findings,
-					...cssAnalysis.findings,
-					...htmlAnalysis.findings,
-					...jsAnalysis.findings,
-				];
-				const codeContext = {
-					css: cssAnalysis.cssData,
-					html: htmlAnalysis.htmlData,
-					js: jsAnalysis.jsData,
-				};
-				aiRewrite = await callGeminiWithFindings(apiKey, mergedFindings, algoResult.overallScore, codeContext);
-			} catch (aiErr) {
-				console.warn('[Percepta] Gemini unavailable, falling back to algorithmic results:', aiErr.message);
-			}
-
-			// Merge algo findings with CSS/HTML/JS findings for the "algo" side
-			const algoWithExtensions = {
-				...algoResult,
-				findings: [
-					...algoResult.findings,
-					...cssAnalysis.findings,
-					...htmlAnalysis.findings,
-					...jsAnalysis.findings,
-				],
-				strengths: [
-					...algoResult.strengths,
-					...cssAnalysis.strengths,
-					...htmlAnalysis.strengths,
-					...jsAnalysis.strengths,
-				],
-			};
-
-			return json({
-				mode: 'compare-algo-ai',
-				screenshot: screenshotDataUrl,
-				overallScore: algoResult.overallScore,
-				algo: algoWithExtensions,
-				algoAi: {
-					summary: aiRewrite?.summary ?? algoResult.summary,
-					findings: aiRewrite?.findings ?? algoWithExtensions.findings,
-					strengths: aiRewrite?.strengths ?? algoWithExtensions.strengths,
-				},
-			});
-		} else if (mode === 'ai') {
-			// AI mode - pass code context for better analysis
-			const codeContext = {
-				css: cssAnalysis.cssData,
-				html: htmlAnalysis.htmlData,
-				js: jsAnalysis.jsData,
-			};
-			const result = await callGemini(apiKey, screenshotB64, codeContext);
-			return json({
-				screenshot: screenshotDataUrl,
-				...result,
-				// Add CSS/HTML/JS findings to AI results
-				findings: [
-					...(result.findings || []),
-					...cssAnalysis.findings,
-					...htmlAnalysis.findings,
-					...jsAnalysis.findings,
-				],
-				strengths: [
-					...(result.strengths || []),
-					...cssAnalysis.strengths,
-					...htmlAnalysis.strengths,
-					...jsAnalysis.strengths,
-				],
-			});
-		} else {
-			// compare mode — run both algo and AI, return side-by-side with CSS/HTML/JS analysis
-			const { elements, vpW, vpH } = await page.evaluate(() => {
-				/**
-				 * @param {string} str
-				 * @returns {number[]}
-				 */
-				function parseColor(str) {
-					if (!str || str === 'transparent') return [255, 255, 255, 0];
-					const m = str.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
-					if (!m) return [128, 128, 128, 1];
-					return [+m[1], +m[2], +m[3], m[4] !== undefined ? +m[4] : 1];
-				}
-
-				/**
-				 * @param {Element} el
-				 * @returns {number[]}
-				 */
-				function getEffectiveBg(el) {
-					let cur = el;
-					while (cur && cur !== document.documentElement) {
-						const bg = window.getComputedStyle(cur).backgroundColor;
-						const parsed = parseColor(bg);
-						if (parsed[3] > 0.05) return parsed;
-						cur = /** @type {Element} */ (cur.parentElement);
-					}
-					return [255, 255, 255, 1];
-				}
-
-				const all = Array.from(document.querySelectorAll('*'));
-				const vW = window.innerWidth;
-				const vH = window.innerHeight;
-				const TEXT_TAGS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span', 'a', 'li', 'label', 'button', 'td', 'th', 'caption']);
-				const INTERACTIVE_TAGS = new Set(['a', 'button', 'input', 'select', 'textarea']);
-				/** @type {any[]} */
-				const results = [];
-				for (const el of all) {
-					const r = el.getBoundingClientRect();
-					if (r.width < 2 || r.height < 2) continue;
-					if (r.bottom < 0 || r.top > vH || r.right < 0 || r.left > vW) continue;
-					const cs = window.getComputedStyle(el);
-					const tag = el.tagName.toLowerCase();
-					results.push({
-						tag,
-						rect: { x: Math.round(Math.max(r.left, 0)), y: Math.round(Math.max(r.top, 0)), w: Math.round(Math.min(r.right, vW) - Math.max(r.left, 0)), h: Math.round(Math.min(r.bottom, vH) - Math.max(r.top, 0)) },
-						color: parseColor(cs.color),
-						bg: getEffectiveBg(el),
-						fontSize: parseFloat(cs.fontSize) || 14,
-						fontWeight: parseInt(cs.fontWeight) || 400,
-						lineHeight: parseFloat(cs.lineHeight) || 0,
-						fontFamily: (cs.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase(),
-						textAlign: cs.textAlign || 'left',
-						textDecoration: (cs.textDecorationLine && cs.textDecorationLine !== 'none')
-							? cs.textDecorationLine
-							: ((cs.textDecoration || '').includes('underline') ? 'underline' : 'none'),
-						letterSpacing: parseFloat(cs.letterSpacing) || 0,
-						paddingTop: parseFloat(cs.paddingTop) || 0,
-						paddingBottom: parseFloat(cs.paddingBottom) || 0,
-						paddingLeft: parseFloat(cs.paddingLeft) || 0,
-						paddingRight: parseFloat(cs.paddingRight) || 0,
-						hasShadow: !!cs.boxShadow && cs.boxShadow !== 'none',
-						boxShadow: (cs.boxShadow && cs.boxShadow !== 'none') ? cs.boxShadow : '',
-						zIndex: cs.zIndex === 'auto' ? 0 : (parseInt(cs.zIndex) || 0),
-						borderWidth: Math.max(
-							parseFloat(cs.borderTopWidth) || 0,
-							parseFloat(cs.borderRightWidth) || 0,
-							parseFloat(cs.borderBottomWidth) || 0,
-							parseFloat(cs.borderLeftWidth) || 0
-						),
-						textTransform: cs.textTransform || 'none',
-						hasBackgroundImage: !!cs.backgroundImage && cs.backgroundImage !== 'none',
-						opacity: parseFloat(cs.opacity) || 1,
-						isText: TEXT_TAGS.has(tag),
-						isInteractive: INTERACTIVE_TAGS.has(tag),
-						textContent: (TEXT_TAGS.has(tag) || INTERACTIVE_TAGS.has(tag))
-							? (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80)
-							: '',
-						alt: tag === 'img' ? (el.getAttribute('alt') || '').trim() : '',
-					});
-				}
-				return { elements: results, vpW: vW, vpH: vH };
-			});
-
-			const algoResult = analyseAlgorithmically(elements, vpW, vpH);
-			const codeContext = {
-				css: cssAnalysis.cssData,
-				html: htmlAnalysis.htmlData,
-				js: jsAnalysis.jsData,
-			};
-			const aiResult = await callGemini(apiKey, screenshotB64, codeContext);
-
-			// Merge algo findings with CSS/HTML/JS findings
-			const algoWithExtensions = {
-				...algoResult,
-				findings: [
-					...algoResult.findings,
-					...cssAnalysis.findings,
-					...htmlAnalysis.findings,
-					...jsAnalysis.findings,
-				],
-				strengths: [
-					...algoResult.strengths,
-					...cssAnalysis.strengths,
-					...htmlAnalysis.strengths,
-					...jsAnalysis.strengths,
-				],
-			};
-
-			// Merge AI findings with CSS/HTML/JS findings
-			const aiWithExtensions = {
-				...aiResult,
-				findings: [
-					...(aiResult.findings || []),
-					...cssAnalysis.findings,
-					...htmlAnalysis.findings,
-					...jsAnalysis.findings,
-				],
-				strengths: [
-					...(aiResult.strengths || []),
-					...cssAnalysis.strengths,
-					...htmlAnalysis.strengths,
-					...jsAnalysis.strengths,
-				],
-			};
-
-			return json({
-				mode: 'compare',
-				screenshot: screenshotDataUrl,
-				algo: algoWithExtensions,
-				ai: aiWithExtensions,
-			});
+		} catch (err) {
+			try { send({ type: 'error', message: err?.message ?? 'Analysis failed' }); } catch { }
+		} finally {
+			try { sse.close(); } catch { }
 		}
-	} finally {
-		await context.close();
-	}
+	})();
+	return new Response(stream, {
+		headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+	});
 }

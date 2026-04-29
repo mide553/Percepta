@@ -8,7 +8,8 @@
 	let result = $state(/** @type {any} */ (null));
 	let errorMsg = $state(/** @type {string | null} */ (null));
 	let filter = $state('all');
-	let stepInterval = /** @type {ReturnType<typeof setInterval> | undefined} */ (undefined);
+	let elapsed = $state(0);
+	let elapsedInterval = /** @type {ReturnType<typeof setInterval> | undefined} */ (undefined);
 	let activeIdx = $state(-1);
 	/** @type {HTMLCanvasElement | null} */
 	let canvasEl = $state(null);
@@ -22,6 +23,11 @@
 	let expandedFixes = $state(/** @type {Record<string, boolean>} */ ({}));
 	let compareResult = $state(/** @type {any} */ (null));
 	let compareAlgoAiResult = $state(/** @type {any} */ (null));
+	let aiUnavailable = $state(false);
+	let noImages = $state(false);
+
+	// CI/CD info balloon
+	let cicdOpen = $state(false);
 
 	// Feedback panel
 	let feedbackOpen = $state(false);
@@ -30,6 +36,16 @@
 	let feedbackComment = $state('');
 	let feedbackStatus = $state(/** @type {'idle'|'sending'|'sent'|'error'} */ ('idle'));
 	let feedbackError = $state('');
+	/** @type {''|'yes'|'no'|'maybe'} */
+	let feedbackPractical = $state('');
+	/** @type {''|'yes'|'no'|'maybe'} */
+	let feedbackWouldUse = $state('');
+	/** @type {''|'yes'|'no'|'maybe'} */
+	let feedbackHelpful = $state('');
+	/** @type {''|'yes'|'no'|'maybe'} */
+	let feedbackCicd = $state('');
+	let feedbackTestedUrl = $state('');
+	let feedbackMissedIssues = $state('');
 
 	const RING_C = 2 * Math.PI * 36;
 
@@ -68,7 +84,7 @@
 				? { label: 'Good', color: '#059669', darkColor: '#34d399' }
 				: result.overallScore >= 55
 					? { label: 'Fair', color: '#d97706', darkColor: '#fbbf24' }
-					: { label: 'Poor', color: '#ef4444', darkColor: '#fca5a5' }
+					: { label: 'Needs Work', color: '#ef4444', darkColor: '#fca5a5' }
 	);
 
 	async function analyse() {
@@ -79,12 +95,10 @@
 		compareResult = null;
 		image = null;
 		step = 0;
+		elapsed = 0;
 		activeIdx = -1;
 		resultMode = mode;
-		const steps = mode === 'algo' ? ALGO_LOADING_STEPS : mode === 'algo-ai' ? ALGO_AI_LOADING_STEPS : (mode === 'compare' || mode === 'compare-algo-ai') ? COMPARE_LOADING_STEPS : LOADING_STEPS;
-		stepInterval = setInterval(() => {
-			step = (step + 1) % steps.length;
-		}, 1600);
+		elapsedInterval = setInterval(() => { elapsed += 1; }, 1000);
 		try {
 			const res = await fetch('/api/analyse', {
 				method: 'POST',
@@ -95,19 +109,44 @@
 				const err = await res.json().catch(() => ({ message: 'Request failed' }));
 				throw new Error(err.message ?? 'Request failed');
 			}
-			const data = await res.json();
-			image = data.screenshot;
-			if (data.mode === 'compare') {
-				compareResult = data;
-			} else if (data.mode === 'compare-algo-ai') {
-				compareAlgoAiResult = data;
-			} else {
-				result = data;
+			const reader = res.body.getReader();
+			const decoder = new TextDecoder();
+			let buffer = '';
+			let gotResult = false;
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				buffer += decoder.decode(value, { stream: true });
+				const parts = buffer.split('\n\n');
+				buffer = parts.pop() ?? '';
+				for (const part of parts) {
+					if (!part.startsWith('data: ')) continue;
+					const event = JSON.parse(part.slice(6));
+					if (event.type === 'step') {
+						step = event.step;
+					} else if (event.type === 'done') {
+						gotResult = true;
+						const data = event.result;
+						image = data.screenshot;
+						aiUnavailable = !!data.aiUnavailable;
+					noImages = !!data.noImages;
+						if (data.mode === 'compare') {
+							compareResult = data;
+						} else if (data.mode === 'compare-algo-ai') {
+							compareAlgoAiResult = data;
+						} else {
+							result = data;
+						}
+					} else if (event.type === 'error') {
+						throw new Error(event.message);
+					}
+				}
 			}
+			if (!gotResult) throw new Error('Analysis ended unexpectedly — please try again.');
 		} catch (e) {
 			errorMsg = /** @type {Error} */ (e).message;
 		} finally {
-			clearInterval(stepInterval);
+			clearInterval(elapsedInterval);
 			loading = false;
 		}
 	}
@@ -122,6 +161,8 @@
 		filter = 'all';
 		activeIdx = -1;
 		expandedFixes = {};
+		aiUnavailable = false;
+		noImages = false;
 	}
 
 	function drawCanvas() {
@@ -176,7 +217,7 @@
 			const res = await fetch('/api/feedback', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ name: feedbackName.trim(), role: feedbackRole.trim(), comment: feedbackComment.trim() }),
+				body: JSON.stringify({ name: feedbackName.trim(), role: feedbackRole.trim(), comment: feedbackComment.trim(), q_practical: feedbackPractical || null, q_workflow: feedbackWouldUse || null, q_helpful: feedbackHelpful || null, q_cicd: feedbackCicd || null, tested_url: feedbackTestedUrl.trim() || null, missed_issues: feedbackMissedIssues.trim() || null }),
 			});
 			if (!res.ok) {
 				const err = await res.json().catch(() => ({ error: 'Request failed' }));
@@ -375,7 +416,7 @@
 					<span
 						style="width:16px;height:16px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;display:inline-block;animation:spin 0.8s linear infinite;"
 					></span>
-					{(mode === 'compare' || mode === 'compare-algo-ai' ? COMPARE_LOADING_STEPS : mode === 'algo-ai' ? ALGO_AI_LOADING_STEPS : ALGO_LOADING_STEPS)[step]}…
+					Loading...
 				{:else if mode === 'ai'}
 					AI Vision — Coming Soon
 				{:else if mode === 'compare'}
@@ -388,6 +429,23 @@
 					Run Raw Audit
 				{/if}
 			</button>
+
+			{#if loading}
+				{@const loadSteps = mode === 'compare' || mode === 'compare-algo-ai' ? COMPARE_LOADING_STEPS : mode === 'algo-ai' ? ALGO_AI_LOADING_STEPS : mode === 'ai' ? LOADING_STEPS : ALGO_LOADING_STEPS}
+				{@const pct = Math.round((step / Math.max(loadSteps.length - 1, 1)) * 88) + 6}
+				<div style="margin-top:14px;">
+					<div style="height:3px;border-radius:2px;background:var(--border);overflow:hidden;">
+						<div style="height:100%;width:{pct}%;background:#2563eb;border-radius:2px;transition:width 1.5s ease;"></div>
+					</div>
+					<p style="text-align:center;font-size:12px;color:var(--text-4);margin-top:8px;">{loadSteps[step]}</p>
+					{#if elapsed > 40 && (mode === 'algo-ai' || mode === 'ai' || mode === 'compare' || mode === 'compare-algo-ai')}
+						<div style="margin-top:10px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:9px 14px;display:flex;align-items:center;gap:8px;">
+							<svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;"><circle cx="7" cy="7" r="6" stroke="#b45309" stroke-width="1.3"/><path d="M7 4v3.5M7 9.5v.5" stroke="#b45309" stroke-width="1.4" stroke-linecap="round"/></svg>
+							<p style="font-size:12px;color:#92400e;line-height:1.5;">The plain-language summary is taking longer than expected — your audit findings are unaffected.</p>
+						</div>
+					{/if}
+				</div>
+			{/if}
 
 			<!-- What gets checked -->
 			<div style="margin-top:48px;">
@@ -569,7 +627,27 @@
 			{@const score = compareAlgoAiResult.overallScore ?? 0}
 			{@const ringC2 = 2 * Math.PI * 36}
 			{@const gradeColor = score >= 80 ? '#059669' : score >= 55 ? '#d97706' : '#ef4444'}
-			{@const gradeLabel = score >= 80 ? 'Good' : score >= 55 ? 'Fair' : 'Poor'}
+			{@const gradeLabel = score >= 80 ? 'Good' : score >= 55 ? 'Fair' : 'Needs Work'}
+
+			{#if aiUnavailable}
+				<div style="background:#854d0e1a;border:1px solid #a16207;border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;gap:12px;align-items:flex-start;">
+					<svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;margin-top:2px;"><circle cx="7" cy="7" r="6" stroke="#b45309" stroke-width="1.3"/><path d="M7 4v3.5M7 9.5v.5" stroke="#b45309" stroke-width="1.4" stroke-linecap="round"/></svg>
+					<div>
+						<p style="font-size:13px;font-weight:600;color:#ca8a04;margin:0 0 4px;">Plain-language summary temporarily unavailable</p>
+						<p style="font-size:13px;color:var(--text-2);margin:0;line-height:1.5;">Gemini is currently overloaded, so the results are displayed as direct algorithmic output without simplified explanations or reference images. The analysis remains accurate, but the wording may be more technical and less user-friendly than usual.</p>
+					</div>
+				</div>
+			{/if}
+
+			{#if noImages}
+				<div style="background:#1e3a5f1a;border:1px solid #2563eb55;border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;gap:12px;align-items:flex-start;">
+					<svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;margin-top:2px;"><circle cx="7" cy="7" r="6" stroke="#3b82f6" stroke-width="1.3"/><path d="M7 4v3.5M7 9.5v.5" stroke="#3b82f6" stroke-width="1.4" stroke-linecap="round"/></svg>
+					<div>
+						<p style="font-size:13px;font-weight:600;color:#60a5fa;margin:0 0 4px;">Reference images not available for this analysis</p>
+						<p style="font-size:13px;color:var(--text-2);margin:0;line-height:1.5;">The AI ran successfully but did not find any book reference images that matched the findings closely enough. The written analysis and recommendations are still complete.</p>
+					</div>
+				</div>
+			{/if}
 
 			<!-- Header -->
 			<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
@@ -693,6 +771,26 @@
 					New Audit
 				</button>
 			</div>
+
+			{#if aiUnavailable}
+				<div style="background:#854d0e1a;border:1px solid #a16207;border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;gap:12px;align-items:flex-start;">
+					<svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;margin-top:2px;"><circle cx="7" cy="7" r="6" stroke="#b45309" stroke-width="1.3"/><path d="M7 4v3.5M7 9.5v.5" stroke="#b45309" stroke-width="1.4" stroke-linecap="round"/></svg>
+					<div>
+						<p style="font-size:13px;font-weight:600;color:#ca8a04;margin:0 0 4px;">Plain-language summary temporarily unavailable</p>
+						<p style="font-size:13px;color:var(--text-2);margin:0;line-height:1.5;">Gemini is currently overloaded, so the results are displayed as direct algorithmic output without simplified explanations or reference images. The analysis remains accurate, but the wording may be more technical and less user-friendly than usual.</p>
+					</div>
+				</div>
+			{/if}
+
+			{#if noImages}
+				<div style="background:#1e3a5f1a;border:1px solid #2563eb55;border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;gap:12px;align-items:flex-start;">
+					<svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;margin-top:2px;"><circle cx="7" cy="7" r="6" stroke="#3b82f6" stroke-width="1.3"/><path d="M7 4v3.5M7 9.5v.5" stroke="#3b82f6" stroke-width="1.4" stroke-linecap="round"/></svg>
+					<div>
+						<p style="font-size:13px;font-weight:600;color:#60a5fa;margin:0 0 4px;">Reference images not available for this analysis</p>
+						<p style="font-size:13px;color:var(--text-2);margin:0;line-height:1.5;">The AI ran successfully but did not find any book reference images that matched the findings closely enough. The written analysis and recommendations are still complete.</p>
+					</div>
+				</div>
+			{/if}
 
 			<!-- Score card -->
 			<div
@@ -828,10 +926,10 @@
 													</div>
 																<p style="font-size:13px;color:var(--text-2);line-height:1.55;margin-bottom:10px;">{f.issue}</p>
 													<button
-														onclick={(e) => { e.stopPropagation(); expandedFixes[f.id] = !expandedFixes[f.id]; }}
+														onclick={(e) => { e.stopPropagation(); expandedFixes[f._idx] = !expandedFixes[f._idx]; }}
 														style="font-size:11px;font-weight:600;color:{c(cat)};border:1px solid {c(cat)}40;background:{c(cat)}0d;padding:4px 10px;border-radius:6px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;"
 													>
-														{#if expandedFixes[f.id]}
+														{#if expandedFixes[f._idx]}
 															<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 7L5 4L8 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
 															Hide fix
 														{:else}
@@ -839,7 +937,7 @@
 															Show fix
 														{/if}
 													</button>
-													{#if expandedFixes[f.id]}
+													{#if expandedFixes[f._idx]}
 											<div style="margin-top:8px;background:{c(cat)}0d;border:1px solid {c(cat)}30;border-radius:8px;padding:10px 12px;">
 												<p style="font-size:12px;color:{c(cat)};line-height:1.55;">{f.recommendation}</p>
 												{#if f.bookImages && f.bookImages.length > 0}
@@ -891,6 +989,49 @@
 	<footer style="text-align:center;padding:20px 24px;border-top:1px solid var(--border-subtle);margin-top:auto;">
 		<p style="font-size:11px;color:var(--text-4);">Percepta is a non-profit prototype developed as part of a Bachelor's thesis. Not intended for commercial use.</p>
 	</footer>
+
+	<!-- ── CI/CD info balloon ─────────────────────────────────────────────── -->
+	<button
+		onclick={() => { cicdOpen = !cicdOpen; }}
+		title="CI/CD pipeline info"
+		aria-label="Learn about CI/CD usage"
+		style="position:fixed;bottom:80px;right:24px;z-index:1000;width:48px;height:48px;border-radius:50%;background:var(--surface);border:1px solid var(--border);cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 12px rgba(0,0,0,0.15);transition:transform 0.15s;"
+		onmouseenter={(e) => { /** @type {HTMLButtonElement} */ (e.currentTarget).style.transform = 'scale(1.08)'; }}
+		onmouseleave={(e) => { /** @type {HTMLButtonElement} */ (e.currentTarget).style.transform = 'scale(1)'; }}
+	>
+		<!-- Terminal/pipeline icon -->
+		<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color:var(--text-3);">
+			<polyline points="4 17 10 11 4 5"/>
+			<line x1="12" y1="19" x2="20" y2="19"/>
+		</svg>
+	</button>
+
+	{#if cicdOpen}
+		<!-- Click-outside backdrop -->
+		<div
+			role="presentation"
+			onclick={() => { cicdOpen = false; }}
+			style="position:fixed;inset:0;z-index:1000;"
+		></div>
+		<!-- Balloon card -->
+		<div style="position:fixed;bottom:80px;right:80px;z-index:1001;width:272px;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;box-shadow:0 8px 32px rgba(0,0,0,0.22);">
+			<!-- Arrow pointing right -->
+			<div style="position:absolute;right:-7px;bottom:18px;width:13px;height:13px;background:var(--surface);border-top:1px solid var(--border);border-right:1px solid var(--border);transform:rotate(45deg);border-radius:2px;"></div>
+			<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+				<div style="width:28px;height:28px;border-radius:8px;background:#1e3a5f33;border:1px solid #2563eb44;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+					<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+				</div>
+				<p style="font-size:13px;font-weight:700;color:var(--text);margin:0;letter-spacing:-0.01em;">CI/CD Ready</p>
+			</div>
+			<p style="font-size:12px;color:var(--text-3);line-height:1.65;margin:0 0 12px;">Percepta is an open-source tool that can run headlessly inside your deployment pipeline. Trigger a design audit on every push and set a minimum score — if the score drops below your threshold, the build fails automatically.</p>
+			<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;">
+				<p style="font-size:10px;font-weight:700;color:var(--text-4);letter-spacing:0.08em;text-transform:uppercase;margin:0 0 6px;">Example pipeline step</p>
+				<code style="font-size:11px;color:#60a5fa;line-height:1.7;white-space:pre-wrap;display:block;">percepta audit \
+  --url $DEPLOY_URL \
+  --min-score 70</code>
+			</div>
+		</div>
+	{/if}
 
 	<!-- ── Feedback floating button ───────────────────────────────────────── -->
 	<button
@@ -944,7 +1085,7 @@
 							<p style="font-size:13px;color:var(--text-3);line-height:1.55;">Your comment has been recorded privately. Thank you for taking the time to review this tool.</p>
 						</div>
 						<button
-							onclick={() => { feedbackStatus = 'idle'; feedbackComment = ''; feedbackName = ''; feedbackRole = ''; feedbackOpen = false; }}
+							onclick={() => { feedbackStatus = 'idle'; feedbackComment = ''; feedbackName = ''; feedbackRole = ''; feedbackPractical = ''; feedbackWouldUse = ''; feedbackHelpful = ''; feedbackCicd = ''; feedbackTestedUrl = ''; feedbackMissedIssues = ''; feedbackOpen = false; }}
 							style="padding:10px 24px;border-radius:10px;background:#2563eb;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;"
 						>Close</button>
 					</div>
@@ -974,6 +1115,31 @@
 								style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:13px;font-family:inherit;color:var(--text);background:var(--surface);outline:none;box-sizing:border-box;"
 							/>
 						</div>
+						<!-- Quick questionnaire -->
+						<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:14px;">
+							<p style="font-size:12px;font-weight:700;color:var(--text-2);margin:0;letter-spacing:-0.01em;">Quick Questions <span style="color:var(--text-5);font-weight:400;font-size:11px;">(optional)</span></p>
+
+							{#snippet ratingRow(label, value, setter, labels)}
+								<div>
+									<p style="font-size:12px;color:var(--text-3);margin:0 0 7px;">{label}</p>
+									<div style="display:flex;gap:6px;">
+										{#each (labels ?? [['yes','Yes'], ['maybe','Partly'], ['no','No']]) as [val, lbl]}
+											<button
+												onclick={() => setter(value === val ? '' : val)}
+												disabled={feedbackStatus === 'sending'}
+												style="flex:1;padding:7px 4px;border-radius:8px;font-size:12px;font-weight:600;border:1.5px solid {value === val ? '#2563eb' : 'var(--border)'};background:{value === val ? '#2563eb' : 'var(--surface-2)'};color:{value === val ? '#fff' : 'var(--text-3)'};cursor:pointer;transition:all 0.12s;"
+											>{lbl}</button>
+										{/each}
+									</div>
+								</div>
+							{/snippet}
+
+							{@render ratingRow('Is this tool practical to use?', feedbackPractical, (v) => { feedbackPractical = v; })}
+							{@render ratingRow('Did the analysis help identify real usability or design issues?', feedbackHelpful, (v) => { feedbackHelpful = v; })}
+							{@render ratingRow('Could you see yourself using a tool like this in your workflow?', feedbackWouldUse, (v) => { feedbackWouldUse = v; }, [['yes','Yes'], ['maybe','Maybe'], ['no','No']])}
+							{@render ratingRow('Would a tool like this be valuable in a CI/CD pipeline?', feedbackCicd, (v) => { feedbackCicd = v; }, [['yes','Yes'], ['maybe','Maybe'], ['no','No']])}
+						</div>
+
 						<div>
 							<label style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Comment <span style="color:#ef4444;font-size:10px;margin-left:3px;">required</span></label>
 							<textarea
@@ -985,6 +1151,35 @@
 								style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:13px;font-family:inherit;color:var(--text);background:var(--surface);outline:none;resize:vertical;min-height:120px;box-sizing:border-box;"
 							></textarea>
 							<p style="font-size:11px;color:var(--text-5);text-align:right;margin-top:3px;">{feedbackComment.length}/2000</p>
+						</div>
+
+						<!-- Optional: tested URLs + missed issues -->
+						<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:14px;">
+							<p style="font-size:12px;font-weight:700;color:var(--text-2);margin:0;letter-spacing:-0.01em;">Help us improve detection <span style="color:var(--text-5);font-weight:400;font-size:11px;">(optional)</span></p>
+							<div>
+								<label style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Website(s) you tested</label>
+								<input
+									type="url"
+									bind:value={feedbackTestedUrl}
+									placeholder="https://example.com"
+									maxlength="500"
+									disabled={feedbackStatus === 'sending'}
+									style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:13px;font-family:inherit;color:var(--text);background:var(--surface-2);outline:none;box-sizing:border-box;"
+								/>
+								<p style="font-size:11px;color:var(--text-5);margin-top:3px;">Paste the URL of the site you ran through Percepta</p>
+							</div>
+							<div>
+								<label style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Issues Percepta missed</label>
+								<textarea
+									bind:value={feedbackMissedIssues}
+									placeholder="e.g. Low-contrast placeholder text wasn't flagged, icon-only buttons had no accessible label…"
+									maxlength="1000"
+									rows="4"
+									disabled={feedbackStatus === 'sending'}
+									style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:13px;font-family:inherit;color:var(--text);background:var(--surface-2);outline:none;resize:vertical;min-height:90px;box-sizing:border-box;"
+								></textarea>
+								<p style="font-size:11px;color:var(--text-5);text-align:right;margin-top:3px;">{feedbackMissedIssues.length}/1000</p>
+							</div>
 						</div>
 
 						{#if feedbackStatus === 'error'}

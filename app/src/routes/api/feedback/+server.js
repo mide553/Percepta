@@ -17,6 +17,13 @@ export async function POST({ request }) {
     const comment = typeof body.comment === 'string' ? body.comment.trim() : '';
     const name = typeof body.name === 'string' ? body.name.slice(0, 120).trim() : '';
     const role = typeof body.role === 'string' ? body.role.slice(0, 120).trim() : '';
+    const tested_url = typeof body.tested_url === 'string' ? body.tested_url.slice(0, 500).trim() : '';
+    const missed_issues = typeof body.missed_issues === 'string' ? body.missed_issues.slice(0, 1000).trim() : '';
+    const VALID = new Set(['yes', 'no', 'maybe', '']);
+    const q_practical = VALID.has(body.q_practical) ? (body.q_practical || null) : null;
+    const q_workflow = VALID.has(body.q_workflow) ? (body.q_workflow || null) : null;
+    const q_helpful = VALID.has(body.q_helpful) ? (body.q_helpful || null) : null;
+    const q_cicd = VALID.has(body.q_cicd) ? (body.q_cicd || null) : null;
 
     if (!comment) return json({ error: 'Comment is required' }, { status: 400 });
     if (comment.length > 2000) return json({ error: 'Comment too long (max 2000 characters)' }, { status: 400 });
@@ -25,7 +32,13 @@ export async function POST({ request }) {
         ts: new Date().toISOString(),
         name: name || null,
         role: role || null,
+        q_practical,
+        q_workflow,
+        q_helpful,
+        q_cicd,
         comment,
+        tested_url: tested_url || null,
+        missed_issues: missed_issues || null,
     };
 
     let entries = [];

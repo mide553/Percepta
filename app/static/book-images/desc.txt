@@ -193,7 +193,7 @@ unnecessarily wide just makes an interface harder to interpret.
 
 93. **image224** — remove
 
-94. **image225** — used to show how text placed directly on a photo without an overlay makes a difference. White text placed directly on a photo is readable over dark areas but completely invisible against bright ones. show this only if there is such text. show this with image227, 228, 229, 230.
+94. **image225** — used to show how text placed directly on a photo without an overlay makes a difference. White text placed directly on a photo is readable over dark areas but completely invisible against bright ones. show this only if there is text over a photo with a bad contrast. show this with image227, 228, 229, 230.
 
 95. **image227** — used to show how a dark overlay on a photo improves text contrast. A semi-transparent dark overlay levels the photo's brightness so white text maintains consistent contrast everywhere.show this only if there is such text. show this with image227, 228, 229, 230.
 
