@@ -47,6 +47,28 @@
 	let feedbackTestedUrl = $state('');
 	let feedbackMissedIssues = $state('');
 
+	// Scroll-triggered score card sticky transition
+	let scoreCardSticky = $state(false);
+	/** @type {HTMLElement | null} */
+	let scoreCardTopEl = $state(null);
+
+	$effect(() => {
+		if (!scoreCardTopEl) return;
+		const obs = new IntersectionObserver(
+			([entry]) => { scoreCardSticky = !entry.isIntersecting; },
+			{ threshold: 0, rootMargin: '-72px 0px 0px 0px' }
+		);
+		obs.observe(scoreCardTopEl);
+		return () => obs.disconnect();
+	});
+
+	// AbortController for cancelling in-flight analyse requests
+	let abortController = /** @type {AbortController | null} */ (null);
+
+	// Parallax
+	let mouseX = $state(0.5);
+	let mouseY = $state(0.5);
+
 	const RING_C = 2 * Math.PI * 36;
 
 	let grouped = $derived(
@@ -98,12 +120,14 @@
 		elapsed = 0;
 		activeIdx = -1;
 		resultMode = mode;
+		abortController = new AbortController();
 		elapsedInterval = setInterval(() => { elapsed += 1; }, 1000);
 		try {
 			const res = await fetch('/api/analyse', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ url: url.trim(), mode })
+				body: JSON.stringify({ url: url.trim(), mode }),
+				signal: abortController.signal
 			});
 			if (!res.ok) {
 				const err = await res.json().catch(() => ({ message: 'Request failed' }));
@@ -144,14 +168,18 @@
 			}
 			if (!gotResult) throw new Error('Analysis ended unexpectedly — please try again.');
 		} catch (e) {
-			errorMsg = /** @type {Error} */ (e).message;
+			if (/** @type {Error} */ (e).name !== 'AbortError') {
+				errorMsg = /** @type {Error} */ (e).message;
+			}
 		} finally {
 			clearInterval(elapsedInterval);
 			loading = false;
+			abortController = null;
 		}
 	}
 
 	function reset() {
+		if (abortController) { abortController.abort(); abortController = null; }
 		url = '';
 		image = null;
 		result = null;
@@ -163,6 +191,7 @@
 		expandedFixes = {};
 		aiUnavailable = false;
 		noImages = false;
+		scoreCardSticky = false;
 	}
 
 	function drawCanvas() {
@@ -231,14 +260,21 @@
 	}
 </script>
 
+<svelte:window onmousemove={(e) => { mouseX = e.clientX / window.innerWidth; mouseY = e.clientY / window.innerHeight; }} />
+
 <svelte:head>
 	<title>Percepta — Optical UI Auditor</title>
 </svelte:head>
 
 <div
 	data-theme={theme}
-	style="min-height:100vh;background:var(--bg);background-image:{theme === 'dark' ? 'url(/percepta-background.svg)' : 'url(/percepta-background-light.svg)'};background-size:cover;background-position:center top;background-attachment:fixed;color:var(--text);font-family:'Plus Jakarta Sans','Inter',sans-serif;"
+	style="min-height:100vh;background:var(--bg);color:var(--text);font-family:'Plus Jakarta Sans','Inter',sans-serif;position:relative;overflow:clip;"
 >
+	<!-- Parallax background layer -->
+	<div
+		aria-hidden="true"
+		style="position:fixed;inset:-40px;pointer-events:none;z-index:0;background-image:{theme === 'dark' ? 'url(/percepta-background.svg)' : 'url(/percepta-background-light.svg)'};background-size:cover;background-position:center top;transform:translate({(mouseX - 0.5) * -32}px, {(mouseY - 0.5) * -24}px);transition:transform 0.25s cubic-bezier(0.25,0.46,0.45,0.94);will-change:transform;"
+	></div>
 	<!-- Nav -->
 	<nav class="app-nav">
 		<div style="display:flex;align-items:center;gap:10px;">
@@ -309,7 +345,7 @@
 		</div>
 	</nav>
 
-	<main style="max-width:{result || compareResult || compareAlgoAiResult ? '1400px' : '800px'};margin:0 auto;padding:48px 24px;transition:max-width 0.3s ease;">
+	<main style="max-width:{result || compareResult || compareAlgoAiResult ? '1400px' : '800px'};margin:0 auto;padding:48px 24px;transition:max-width 0.3s ease;position:relative;z-index:1;">
 		{#if !result && !compareResult && !compareAlgoAiResult}
 			<!-- Hero -->
 			<div style="text-align:center;margin-bottom:48px;">
@@ -792,73 +828,78 @@
 				</div>
 			{/if}
 
-			<!-- Score card -->
-			<div
-				style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px;margin-bottom:20px;display:flex;gap:28px;align-items:flex-start;"
-			>
-				<div style="text-align:center;flex-shrink:0;">
-					<svg width="88" height="88" viewBox="0 0 88 88">
-						<circle cx="44" cy="44" r="36" fill="none" style="stroke:var(--border)" stroke-width="8" />
-						<circle
-							cx="44"
-							cy="44"
-							r="36"
-							fill="none"
-					stroke={scoreGrade ? c(scoreGrade) : undefined}
-							stroke-width="8"
-							stroke-dasharray={RING_C}
-							stroke-dashoffset={RING_C * (1 - result.overallScore / 100)}
-							stroke-linecap="round"
-							transform="rotate(-90 44 44)"
-							style="transition:stroke-dashoffset 1s ease;"
-						/>
-						<text
-							x="44"
-							y="48"
-							text-anchor="middle"
-							font-size="18"
-							font-weight="700"
-							fill={scoreGrade ? c(scoreGrade) : undefined}
-							font-family="Plus Jakarta Sans, Inter, sans-serif"
-						>
-							{result.overallScore}
-						</text>
-					</svg>
-					<p style="font-size:12px;font-weight:600;color:{scoreGrade ? c(scoreGrade) : 'var(--text-3)'};margin-top:4px;">
-						{scoreGrade?.label}
-					</p>
-				</div>
-
-				<div style="flex:1;">
-					<p style="font-size:14px;color:var(--text-2);line-height:1.65;margin-bottom:16px;">
-						{result.summary}
-					</p>
-					<div style="display:flex;gap:8px;flex-wrap:wrap;">
-						{#each [['all', 'All', 'var(--text-2)'], ['critical', 'Critical', c(SEV.critical)], ['warning', 'Warning', c(SEV.warning)], ['info', 'Info', c(SEV.info)]] as [key, label, color]}
-							<button
-								onclick={() => (filter = key)}
-								style="padding:4px 12px;border-radius:20px;font-size:12px;font-weight:500;border:1px solid;border-color:{filter ===
-								key
-									? color
-									: 'var(--border)'};background:{filter === key
-									? color + '1a'
-									: 'transparent'};color:{filter === key ? color : 'var(--text-3)'};"
-							>
-								{label} · {counts[/** @type {keyof typeof counts} */ (key)]}
-							</button>
-						{/each}
-					</div>
-				</div>
-			</div>
-
 			<!-- Hidden source image for canvas drawing -->
 			<img bind:this={imgEl} src={image} alt="" style="display:none;" />
 
-			<!-- Two-column layout: sticky screenshot LEFT, scrollable findings RIGHT -->
+			{#snippet scoreCardContent()}
+				<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:24px;display:flex;gap:24px;align-items:flex-start;">
+					<div style="text-align:center;flex-shrink:0;">
+						<svg width="88" height="88" viewBox="0 0 88 88">
+							<circle cx="44" cy="44" r="36" fill="none" style="stroke:var(--border)" stroke-width="8" />
+							<circle
+								cx="44"
+								cy="44"
+								r="36"
+								fill="none"
+								stroke={scoreGrade ? c(scoreGrade) : undefined}
+								stroke-width="8"
+								stroke-dasharray={RING_C}
+								stroke-dashoffset={RING_C * (1 - result.overallScore / 100)}
+								stroke-linecap="round"
+								transform="rotate(-90 44 44)"
+								style="transition:stroke-dashoffset 1s ease;"
+							/>
+							<text
+								x="44"
+								y="48"
+								text-anchor="middle"
+								font-size="18"
+								font-weight="700"
+								fill={scoreGrade ? c(scoreGrade) : undefined}
+								font-family="Plus Jakarta Sans, Inter, sans-serif"
+							>
+								{result.overallScore}
+							</text>
+						</svg>
+						<p style="font-size:12px;font-weight:600;color:{scoreGrade ? c(scoreGrade) : 'var(--text-3)'};margin-top:4px;">
+							{scoreGrade?.label}
+						</p>
+					</div>
+					<div style="flex:1;">
+						<p style="font-size:14px;color:var(--text-2);line-height:1.65;margin-bottom:16px;">
+							{result.summary}
+						</p>
+						<div style="display:flex;gap:8px;flex-wrap:wrap;">
+							{#each [['all', 'All', 'var(--text-2)'], ['critical', 'Critical', c(SEV.critical)], ['warning', 'Warning', c(SEV.warning)], ['info', 'Info', c(SEV.info)]] as [key, label, color]}
+								<button
+									onclick={() => (filter = key)}
+									style="padding:4px 12px;border-radius:20px;font-size:12px;font-weight:500;border:1px solid;border-color:{filter === key ? color : 'var(--border)'};background:{filter === key ? color + '1a' : 'transparent'};color:{filter === key ? color : 'var(--text-3)'};"
+								>
+									{label} · {counts[/** @type {keyof typeof counts} */ (key)]}
+								</button>
+							{/each}
+						</div>
+					</div>
+				</div>
+			{/snippet}
+
+			<!-- Score card at top (full-width). Observed by IntersectionObserver; fades out once it scrolls off-screen. -->
+			<div bind:this={scoreCardTopEl} style="margin-bottom:20px;opacity:{scoreCardSticky ? 0 : 1};pointer-events:{scoreCardSticky ? 'none' : 'auto'};transition:opacity 0.3s ease;">
+				{@render scoreCardContent()}
+			</div>
+
+			<!-- Two-column layout: sticky left (screenshot, + score card once scrolled), scrollable right (findings) -->
 			<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start;">
 
-				<!-- LEFT: screenshot -->
-				<div style="position:sticky;top:72px;">
+				<!-- LEFT: sticky panel -->
+				<div style="position:sticky;top:72px;display:flex;flex-direction:column;gap:12px;">
+
+					<!-- Score card appears here once the top one scrolls off-screen -->
+					<div style="overflow:hidden;max-height:{scoreCardSticky ? '600px' : '0'};opacity:{scoreCardSticky ? 1 : 0};transition:max-height 0.3s ease,opacity 0.3s ease;">
+						{@render scoreCardContent()}
+					</div>
+
+					<!-- Screenshot canvas -->
 					<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">
 						<canvas
 							bind:this={canvasEl}
