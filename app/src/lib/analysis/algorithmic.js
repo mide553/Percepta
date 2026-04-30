@@ -116,6 +116,46 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
         });
     }
 
+    // ── CHECK 0 — Content Sparseness ──────────────────────────────────────────
+    // Near-empty pages (splash screens, single-button login pages, parked domains)
+    // pass most perceptual checks by default — not because the design is strong,
+    // but because there is almost nothing to assess. A score near 100 on a nearly
+    // blank page misrepresents design quality.
+    {
+        // Count text characters and interactive elements in the main content area
+        // (excluding nav strip at top and thin footer strip at bottom).
+        const mainY0 = vpH * 0.10;
+        const mainY1 = vpH * 0.90;
+        const mainTextChars = textEls
+            .filter(e => e.rect.y + e.rect.h / 2 > mainY0 && e.rect.y + e.rect.h / 2 < mainY1)
+            .reduce((acc, e) => acc + (e.textContent || '').trim().length, 0);
+        const mainInteractive = vis.filter(e =>
+            e.isInteractive &&
+            e.rect.y + e.rect.h / 2 > mainY0 &&
+            e.rect.y + e.rect.h / 2 < mainY1
+        ).length;
+        const mainElements = vis.filter(e =>
+            e.rect.y + e.rect.h / 2 > mainY0 &&
+            e.rect.y + e.rect.h / 2 < mainY1 &&
+            e.rect.w > 10 && e.rect.h > 10
+        ).length;
+
+        if (mainTextChars < 100 && mainInteractive <= 1 && mainElements < 20) {
+            findings.push({
+                id: nid(),
+                category: 'Visual Hierarchy',
+                severity: 'warning',
+                noImages: true,
+                element: `Page has very little content — ${mainTextChars} characters of visible text and ${mainInteractive} interactive element${mainInteractive !== 1 ? 's' : ''} in the main area`,
+                bookImages: [],
+                issue: `This page contains almost no visible content: only ${mainTextChars} characters of text and ${mainInteractive} interactive element${mainInteractive !== 1 ? 's' : ''} outside the nav and footer. Near-empty pages pass most perceptual checks by default — not because the design is strong, but because there is too little to assess. Users landing on a sparse page with no navigation, minimal copy, and a single action have no visual signals to orient themselves or understand the page's purpose before acting.`,
+                recommendation: 'If this is an intentional splash, login gateway, or coming-soon page: add a brief description of what the user is expected to do, ensure the primary action has clear visual weight (solid filled button, not a ghost), and include a branded heading. If this is a full-content page, consider whether users have enough context — explanatory copy, visual hierarchy, and navigation — to understand where they are and what to do next.',
+                boundingBox: [0, 0, 1000, 1000],
+            });
+        }
+    }
+
+    let contrastTierFired = false;
     // ── CHECK 1 — Text Contrast ────────────────────────────────────────────────
     {
         // Size-dependent APCA minimum Lc values (simplified from APCA research):
@@ -191,6 +231,7 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                 const minLc = Math.min(...lcValues);
                 const lcRange = maxLc - minLc;
                 if (lcRange < 12 && maxLc > 35) {
+                    contrastTierFired = true;
                     findings.push({
                         id: nid(),
                         category: 'Readability',
@@ -259,6 +300,11 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
     // ── CHECK 2 — Optical Centering ────────────────────────────────────────────
     {
         let wx = 0, wy = 0, wTotal = 0, leftW = 0, rightW = 0;
+        // Nav/header zone weight: tracks asymmetry of elements in the top strip of the page
+        // (logo-left / links-right patterns). Full-width backgrounds are excluded from this
+        // so only actual nav content (logos, links, icons) contributes.
+        let navLeftW = 0, navRightW = 0;
+        const navZoneH = Math.min(110, vpH * 0.12);
         for (const el of vis) {
             // Images and CSS background-image elements: their background colour in the DOM
             // is the parent's colour (usually white), not the actual image pixels.
@@ -266,12 +312,38 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
             // with meaningful visual weight instead of near-zero.
             const bgL = (el.tag === 'img' || el.hasBackgroundImage) ? 0.35 : luma(el.bg[0], el.bg[1], el.bg[2]);
             const area = el.rect.w * el.rect.h;
+            // Large panels with a border or shadow are spatially prominent even when
+            // near-white — add a minimum weight so they register in L/R balance checks.
+            // Without this, a wide white card produces near-zero weight (area × ~0.02)
+            // and is effectively invisible to the balance algorithm.
+            const hasBoundary = el.borderWidth > 0 || el.hasShadow;
+            const minW = hasBoundary ? 0.20 : 0.06;
             // Multiply by density factor: packed areas feel heavier (balance theory)
-            const w = area * (1 - bgL) * (densityFactor.get(el) ?? 1.0);
+            const w = area * Math.max(1 - bgL, minW) * (densityFactor.get(el) ?? 1.0);
             const cx = el.rect.x + el.rect.w / 2;
             const cy = el.rect.y + el.rect.h / 2;
             wx += cx * w; wy += cy * w; wTotal += w;
-            if (cx < vpW / 2) leftW += w; else rightW += w;
+            // Proportional left/right split: elements spanning the midline contribute weight
+            // to each side in proportion to their area on that side. This avoids false
+            // positives where a full-width element dumps its entire weight onto one side.
+            // Near-full-width structural backgrounds (>80% viewport width) are excluded
+            // from the L/R ratio — they are horizontal wrappers, not directional content,
+            // and their 50/50 split would otherwise dilute real left-right imbalances.
+            const midX = vpW / 2;
+            const elRight = el.rect.x + el.rect.w;
+            const leftFracX = elRight <= midX ? 1 : (el.rect.x >= midX ? 0 : (midX - el.rect.x) / Math.max(1, el.rect.w));
+            const isFullWidthEl = el.rect.w > vpW * 0.80;
+            if (!isFullWidthEl) {
+                leftW += w * leftFracX;
+                rightW += w * (1 - leftFracX);
+            }
+            // Accumulate nav-zone weight (skip near-full-width backgrounds — same
+            // exclusion as the main L/R accumulation above).
+            const isNavEl = el.rect.y < navZoneH && el.rect.y + el.rect.h < navZoneH * 2.5;
+            if (isNavEl && !isFullWidthEl) {
+                navLeftW += w * leftFracX;
+                navRightW += w * (1 - leftFracX);
+            }
         }
         const comX = wTotal > 0 ? wx / wTotal : vpW / 2;
         const comY = wTotal > 0 ? wy / wTotal : vpH / 2;
@@ -284,7 +356,7 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
         // Only emit the center-of-mass finding when the imbalance is primarily vertical
         // OR when the left-right ratio check won't fire for the same issue.
         const offsetPrimarilyHorizontal = Math.abs(dxN) > Math.abs(dyN) * 0.7;
-        if (offsetMag > 0.10 && !(offsetPrimarilyHorizontal && lrRatio > 0.40)) {
+        if (offsetMag > 0.10 && !(offsetPrimarilyHorizontal && lrRatio > 0.30)) {
             const parts = [];
             if (Math.abs(dxN) > 0.06) parts.push(dxN > 0 ? 'right' : 'left');
             if (Math.abs(dyN) > 0.06) parts.push(dyN > 0 ? 'downward' : 'upward');
@@ -305,43 +377,131 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
         } else {
             strengths.push('The page is visually centred — no obvious leaning to one side.');
         }
-        if (lrRatio > 0.40) {
+        // Threshold 0.30: the heavy side holds at least 65% of total weight.
+        // Lowered from 0.40 to account for cases where full-width parent backgrounds
+        // (split proportionally 50/50) dilute the ratio even when a clearly heavier
+        // content block exists on one side.
+        if (lrRatio > 0.30) {
             const heavy = leftW > rightW ? 'left' : 'right';
             const light = heavy === 'left' ? 'right' : 'left';
 
-            // Detect split-screen layout: heavy side has a large image/box, light side
-            // has text elements spread vertically. In this case the imbalance is structural
-            // and intentional — text columns perceptually balance image panels even when
-            // raw area weight differs, because spatial distribution creates counterweight.
+            // Detect split-screen layout: heavy side has a large image OR a large
+            // non-white colored block; light side has text spread vertically.
+            // Expanded from image-only check so plain colored div panels are also caught.
             const heavyHalf = vis.filter(e => (e.rect.x + e.rect.w / 2) < vpW / 2 === (heavy === 'left'));
             const lightHalf = vis.filter(e => (e.rect.x + e.rect.w / 2) < vpW / 2 === (heavy === 'right'));
-            const heavyHasLargeImage = heavyHalf.some(e =>
-                (e.tag === 'img' || e.hasBackgroundImage) &&
-                e.rect.w * e.rect.h > vpW * vpH * 0.15
-            );
+            const heavyHasLargeContent = heavyHalf.some(e => {
+                if (e.rect.w * e.rect.h <= vpW * vpH * 0.15) return false;
+                if (e.tag === 'img' || e.hasBackgroundImage) return true;
+                const elBgL = luma(e.bg[0], e.bg[1], e.bg[2]);
+                return elBgL < 0.85; // any meaningfully non-white large block counts
+            });
             const lightTextEls = lightHalf.filter(e => e.isText && e.rect.w > 40);
             const lightTextSpan = lightTextEls.length >= 3
                 ? Math.max(...lightTextEls.map(e => e.rect.y + e.rect.h)) - Math.min(...lightTextEls.map(e => e.rect.y))
                 : 0;
-            const isSplitLayout = heavyHasLargeImage && lightTextSpan > vpH * 0.30;
+            const isSplitLayout = heavyHasLargeContent && lightTextSpan > vpH * 0.30;
 
-            findings.push({
-                id: nid(),
-                category: 'Visual Weight',
-                severity: isSplitLayout ? 'info' : (lrRatio > 0.60 ? 'warning' : 'info'),
-                element: isSplitLayout
-                    ? `Split layout — image on the ${heavy} side, text column on the ${light}`
-                    : `Noticeably more visual weight on the ${heavy} side`,
-                issue: isSplitLayout
-                    ? `The ${heavy} side carries a large image or content block while the ${light} side has a text column. This is a common and effective split-screen composition — a text column spread vertically creates perceptual counterweight even when raw area weight differs. Worth checking visually that neither side feels dominant enough to steal focus from the main message.`
-                    : `The ${heavy} side holds significantly more visual weight than the ${light}. This could be intentional (split-screen, sidebar) or an accidental imbalance. Check that it feels deliberate rather than unplanned.`,
-                recommendation: isSplitLayout
-                    ? `No fix needed if this is intentional. If one side feels too dominant, try increasing whitespace around the lighter column or reducing the image's visual contrast with a subtle overlay.`
-                    : `If the imbalance is planned, no fix needed. If it surprised you, check whether a large dark container or image on the ${heavy} side can be lightened or resized without breaking the design intent.`,
-                boundingBox: heavy === 'left' ? [0, 0, 1000, 500] : [0, 500, 1000, 1000],
-            });
+            // Check whether the imbalance originates from nav/header content
+            // (logo on one side, links/icons on the other — a common intentional pattern).
+            const navTotal = navLeftW + navRightW;
+            const navLrRatio = navTotal > 0 ? Math.abs(navLeftW - navRightW) / navTotal : 0;
+            const navHeavySide = navLeftW > navRightW ? 'left' : 'right';
+            const navExplainsImbalance = navLrRatio > 0.40 && navHeavySide === heavy;
+
+            if (navExplainsImbalance && !isSplitLayout) {
+                // The page-level imbalance is driven by nav bar content (logo/links).
+                // Report as info: this is almost always intentional design.
+                findings.push({
+                    id: nid(),
+                    category: 'Visual Weight',
+                    severity: 'info',
+                    element: `Navigation bar adds visual weight to the ${heavy} side`,
+                    issue: `The ${heavy} side of the page carries more visual weight, and the main contributor appears to be your navigation bar — a typical logo-left / links-right (or reversed) pattern. This is standard practice and usually looks intentional. Worth a quick visual check to confirm neither side feels unexpectedly dominant.`,
+                    recommendation: `No action needed if this is the intended nav layout. If the imbalance feels too strong, consider balancing nav items (e.g. add a CTA button on the lighter side) or reducing the logo size slightly.`,
+                    boundingBox: heavy === 'left' ? [0, 0, 150, 500] : [0, 500, 150, 1000],
+                });
+            } else {
+                findings.push({
+                    id: nid(),
+                    category: 'Visual Weight',
+                    severity: isSplitLayout ? 'info' : (lrRatio > 0.55 ? 'warning' : 'info'),
+                    element: isSplitLayout
+                        ? `Split layout — content block on the ${heavy} side, text column on the ${light}`
+                        : `Noticeably more visual weight on the ${heavy} side`,
+                    issue: isSplitLayout
+                        ? `The ${heavy} side carries a large content block while the ${light} side has a text column. This is a common and effective split-screen composition — a text column spread vertically creates perceptual counterweight even when raw area weight differs. Worth checking visually that neither side feels dominant enough to steal focus from the main message.`
+                        : `The ${heavy} side holds significantly more visual weight than the ${light}. This could be intentional (split-screen, sidebar) or an accidental imbalance. Check that it feels deliberate rather than unplanned.`,
+                    recommendation: isSplitLayout
+                        ? `No fix needed if this is intentional. If one side feels too dominant, try increasing whitespace around the lighter column or reducing the content block's visual contrast.`
+                        : `If the imbalance is planned, no fix needed. If it surprised you, check whether a large dark container or image on the ${heavy} side can be lightened or resized without breaking the design intent.`,
+                    boundingBox: heavy === 'left' ? [0, 0, 1000, 500] : [0, 500, 1000, 1000],
+                });
+            }
         } else {
             strengths.push('Left–right visual weight is well balanced.');
+        }
+
+        // ── Sub-check: single dominant off-center element ────────────────────
+        // The whole-page L/R ratio is often diluted to below the 0.30 threshold by
+        // symmetric container divs wrapping the content on both sides — even when
+        // the page clearly has a large image or coloured block dominating one side.
+        // This sub-check looks directly at whether one element holds a
+        // disproportionate share of the non-full-width visual weight AND sits
+        // notably off-center. Container dilution cannot hide this.
+        {
+            const nfwTotalW = leftW + rightW;  // computed in the L/R loop above
+            if (nfwTotalW > 0) {
+                let heaviestEl = null, heaviestElW = 0;
+                for (const el of vis) {
+                    if (el.isText) continue;
+                    if (el.rect.w > vpW * 0.80) continue;           // skip full-width wrappers
+                    if (el.rect.w * el.rect.h < vpW * vpH * 0.03) continue;  // skip tiny elements
+                    const bgL = (el.tag === 'img' || el.hasBackgroundImage) ? 0.35 : luma(el.bg[0], el.bg[1], el.bg[2]);
+                    const area = el.rect.w * el.rect.h;
+                    const hasBoundary = el.borderWidth > 0 || el.hasShadow;
+                    const minW = hasBoundary ? 0.20 : 0.06;
+                    const w = area * Math.max(1 - bgL, minW) * (densityFactor.get(el) ?? 1.0);
+                    if (w > heaviestElW) { heaviestElW = w; heaviestEl = el; }
+                }
+                if (heaviestEl) {
+                    const fraction = heaviestElW / nfwTotalW;
+                    const elCx = heaviestEl.rect.x + heaviestEl.rect.w / 2;
+                    const offCenter = Math.abs(elCx - vpW / 2) / vpW;
+                    // Visually distinctive = an image/bg-image, OR has a meaningful colour
+                    // (not a plain neutral white/grey/black surface). Prevents dark-theme
+                    // background cards from triggering the check on unsaturated dark UIs.
+                    const [, sBg] = rgbToHsl(heaviestEl.bg[0], heaviestEl.bg[1], heaviestEl.bg[2]);
+                    const isVisuallyDistinctive = heaviestEl.tag === 'img'
+                        || heaviestEl.hasBackgroundImage
+                        || sBg > 0.20;
+                    // Fire when:
+                    //  • element dominates (>25% of non-full-width weight)
+                    //  • noticeably off-center (>6% of vpW from midline — ~86px at 1440)
+                    //  • visually distinctive (image or coloured, not a plain neutral surface)
+                    //  • whole-page L/R check did not already cover this (lrRatio <= 0.30)
+                    if (fraction > 0.25 && offCenter > 0.06 && isVisuallyDistinctive && lrRatio <= 0.30) {
+                        const side = elCx > vpW / 2 ? 'right' : 'left';
+                        const otherSide = side === 'left' ? 'right' : 'left';
+                        const elemDesc = heaviestEl.tag === 'img' ? 'image'
+                            : (heaviestEl.hasBackgroundImage ? 'background image area' : 'coloured block');
+                        findings.push({
+                            id: nid(),
+                            category: 'Visual Weight',
+                            severity: 'info',
+                            element: `Large ${elemDesc} on the ${side} — carries ~${Math.round(fraction * 100)}% of the hero-area visual weight`,
+                            issue: `A prominent ${elemDesc} positioned toward the ${side} side of the page accounts for roughly ${Math.round(fraction * 100)}% of the visible weight in the hero area. Because nothing of comparable weight anchors the ${otherSide} side, it creates a gravitational pull that can draw the eye toward the ${side} before visitors have absorbed the content on the ${otherSide}. This is often a deliberate product-image or illustration layout — the question is whether it feels intentional and whether the primary message on the ${otherSide} still gets seen.`,
+                            recommendation: `If this is a planned hero layout (product photo, illustration, branded graphic), it can look great. To ensure the ${otherSide} side is not overshadowed: add a high-contrast CTA button or bold headline on the ${otherSide} to provide perceptual counterweight. Even a single strongly-styled primary button can anchor the lighter side and make the layout feel deliberate rather than unbalanced.`,
+                            bookImages: [
+                                { src: 'image277.jpg', caption: `A bold CTA on the ${otherSide} provides perceptual counterweight to a heavy ${elemDesc} on the ${side}.` },
+                                { src: 'image281.jpg', caption: 'A large image or block on one side creates visual tension — worth verifying this is intentional.' },
+                                { src: 'image282.jpg', caption: 'Resolved: the lighter side is anchored by a strong headline and a clearly styled CTA button.' },
+                            ],
+                            boundingBox: toBBox(heaviestEl.rect, vpW, vpH),
+                        });
+                    }
+                }
+            }
         }
     }
 
@@ -352,7 +512,6 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
         // weight to each half in proportion to how much of its area falls there.
         // This avoids the bias caused by large elements whose centre falls just above or
         // below the midline being assigned entirely to one half.
-        let topW2 = 0, botW2 = 0;
         const qWeights = [0, 0, 0, 0]; // [top-left, top-right, bottom-left, bottom-right]
         const midX = vpW / 2;
         const midY = vpH / 2;
@@ -361,15 +520,11 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
             const w = el.rect.w * el.rect.h * (1 - bgL) * (densityFactor.get(el) ?? 1.0);
             if (w <= 0) continue;
 
-            // Proportional top/bottom split
+            // Proportional quadrant split (horizontal + vertical)
             const elTop = el.rect.y;
             const elBot = el.rect.y + el.rect.h;
             const h = Math.max(1, el.rect.h);
             const topFracY = elBot <= midY ? 1 : (elTop >= midY ? 0 : (midY - elTop) / h);
-            topW2 += w * topFracY;
-            botW2 += w * (1 - topFracY);
-
-            // Proportional quadrant split (horizontal + vertical)
             const elLeft = el.rect.x;
             const elRight = el.rect.x + el.rect.w;
             const ww = Math.max(1, el.rect.w);
@@ -378,26 +533,6 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
             qWeights[1] += w * (1 - leftFracX) * topFracY;     // top-right
             qWeights[2] += w * leftFracX * (1 - topFracY);     // bottom-left
             qWeights[3] += w * (1 - leftFracX) * (1 - topFracY); // bottom-right
-        }
-
-        // Sub-check A: top/bottom imbalance
-        const tbTotal = topW2 + botW2;
-        const tbRatio = tbTotal > 0 ? Math.abs(topW2 - botW2) / tbTotal : 0;
-        if (tbRatio > 0.52) {
-            const heavy = topW2 > botW2 ? 'top' : 'bottom';
-            findings.push({
-                id: nid(),
-                category: 'Visual Weight',
-                severity: tbRatio > 0.65 ? 'warning' : 'info',
-                element: `Strong top–bottom imbalance — the ${heavy} half of the page carries significantly more visual weight`,
-                issue: `The ${heavy} half of the viewport carries ${Math.round(tbRatio * 100)}% more visual weight than the opposite half. ${heavy === 'top' ? 'Top-heavy layouts can feel claustrophobic or unstable — as if the page is pressing down. This is common with large hero sections and dense navigation bars, but if unintentional it may push important below-the-fold content into visual obscurity.' : 'Bottom-heavy layouts are unusual and often unintentional. When the dominant visual mass sits in the lower half, critical content arrives too late in the user journey — most visitors form their first impression before scrolling reaches the bottom of the page.'}`,
-                recommendation: heavy === 'top'
-                    ? 'If the top section is a hero or heavy navigation, balance it by making the mid-page content strongly prominent with a bold section break, vivid background, or high-contrast headline. If the imbalance is purely the navigation, consider a lighter header background.'
-                    : 'Move your most critical content higher. Check whether any unnecessarily large images, dark footer areas, or dense card grids near the bottom can be lightened or resized. The first viewport should carry more visual weight than the bottom.',
-                boundingBox: heavy === 'top' ? [0, 0, 500, 1000] : [500, 0, 1000, 1000],
-            });
-        } else if (tbRatio <= 0.20) {
-            strengths.push('Top-to-bottom weight distribution is balanced — visual mass is spread through the vertical axis without either half dominating.');
         }
 
         // Sub-check B: quadrant concentration
@@ -585,7 +720,11 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
             }
         }
         const total = seen.size;
-        const threshold = Math.max(2, total * 0.03);
+        // threshold=0: any band with at least one unique colour counts as populated.
+        // Using total*0.03 was too aggressive for minimal palettes that rely on CSS
+        // variables — each brightness level may have only one unique quantised colour,
+        // but the design is still tonally diverse.
+        const threshold = 0;
         const populated = hist.filter(c => c > threshold).length;
 
         // Sub-check A: too few tonal bands — critical to warning based on severity
@@ -667,7 +806,12 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                 const medBg = bgLumasSample.slice().sort((a, b) => a - b)[Math.floor(bgLumasSample.length / 2)];
                 if (medBg < 0.12) {
                     // Dark-background design detected
-                    const darkTextOnDark = textEls.filter(e => luma(e.color[0], e.color[1], e.color[2]) < 0.20);
+                    // Only flag text where the element's own background is also dark —
+                    // dark text inside light card insets / inputs is intentional and correct.
+                    const darkTextOnDark = textEls.filter(e =>
+                        luma(e.color[0], e.color[1], e.color[2]) < 0.20 &&
+                        luma(e.bg[0], e.bg[1], e.bg[2]) < 0.25
+                    );
                     if (darkTextOnDark.length >= 3) {
                         findings.push({
                             id: nid(),
@@ -930,10 +1074,12 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
             // Sub-check D: heading colour as hierarchy signal
             // Headings that share the exact same colour as body text miss a hierarchy dimension.
             // Even a subtle shift darker or toward the brand colour helps.
+            // Only fires if Sub-check C (flat contrast tier range) did NOT already fire —
+            // both diagnose the same root cause: colour is not differentiating text tiers.
             {
                 const headingEls = textEls.filter(e => ['h1', 'h2', 'h3'].includes(e.tag));
                 const bodyEls = textEls.filter(e => ['p', 'li'].includes(e.tag) && e.fontSize >= 13 && e.fontSize <= 20);
-                if (headingEls.length >= 2 && bodyEls.length >= 3) {
+                if (!contrastTierFired && headingEls.length >= 2 && bodyEls.length >= 3) {
                     const medianLumaArr = (arr) => {
                         const ls = arr.map(e => luma(e.color[0], e.color[1], e.color[2])).sort((a, b) => a - b);
                         return ls[Math.floor(ls.length / 2)];
@@ -1140,38 +1286,6 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
         }
     }
 
-    // ── CHECK 9 — Vertical Weight Distribution ──────────────────────────────────
-    {
-        const third = vpH / 3;
-        let topW = 0, midW = 0, botW = 0;
-        for (const el of vis) {
-            const cy = el.rect.y + el.rect.h / 2;
-            // Same image fix: use mid-tone estimate so photos and CSS background-image sections have weight
-            const bgL = (el.tag === 'img' || el.hasBackgroundImage) ? 0.35 : luma(el.bg[0], el.bg[1], el.bg[2]);
-            // Density factor: a packed section feels vertically heavier than a sparse one
-            const w = (el.rect.w * el.rect.h) / (vpW * vpH) * (1 - bgL) * (densityFactor.get(el) ?? 1.0);
-            if (cy < third) topW += w;
-            else if (cy < third * 2) midW += w;
-            else botW += w;
-        }
-        const botVsMid = midW > 0 ? botW / midW : 1;
-        const topVsBot = botW > 0 ? topW / botW : 1;
-        if (botVsMid > 1.8 && botW > topW) {
-            findings.push({
-                id: nid(),
-                category: 'Visual Weight',
-                severity: botVsMid > 2.5 ? 'warning' : 'info',
-                element: 'Bottom section feels heavier than the rest',
-                issue: 'The bottom section of the page has more visual weight than the top. Most pages have a strong start and lighter content as you scroll down. When the bottom feels heavier, the layout can feel off-balance.',
-                recommendation: 'Lighten the bottom section: use less bold text, reduce element density, or use a slightly lighter background. Make sure your footer is not drawing more attention than your main headline or button.',
-                boundingBox: [Math.round(third * 2 / vpH * 1000), 0, 1000, 1000],
-            });
-        } else if (topVsBot >= 1.1 && topVsBot <= 3.0) {
-            strengths.push('The page is well-balanced top to bottom — more visual interest at the top naturally guides the eye down the page.');
-        }
-
-    }
-
     // ── CHECK 10 — Simultaneous Contrast ──────────────────────────────────────
     {
         let vibEdges = 0, chromaEdges = 0;
@@ -1303,14 +1417,19 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
             // Per alignment theory: elements sharing the same horizontal row should align
             // on a common top, centre, or bottom axis. Misaligned rows look unpolished
             // even when every individual element looks fine in isolation.
+            // Exclude elements in the top nav strip — nav links and utility buttons are
+            // intentionally variable in height and should not be assessed as a content row.
             {
                 const rowThreshold = 20; // px — elements whose y-centres are within this range share a row.
+                const navStripBottom = vpH * 0.12; // top 12% of viewport is treated as nav territory
                 // Intentionally NOT updated after each addition to prevent
                 // the row centre from drifting across multiple visual rows.
                 const rows = [];
-                const sortedByY = [...alignCandidates].sort((a, b) =>
-                    (a.rect.y + a.rect.h / 2) - (b.rect.y + b.rect.h / 2)
-                );
+                const sortedByY = [...alignCandidates]
+                    .filter(e => e.rect.y + e.rect.h / 2 > navStripBottom)
+                    .sort((a, b) =>
+                        (a.rect.y + a.rect.h / 2) - (b.rect.y + b.rect.h / 2)
+                    );
                 for (const el of sortedByY) {
                     const cy = el.rect.y + el.rect.h / 2;
                     const row = rows.find(r => Math.abs(r.cy - cy) < rowThreshold);
@@ -1406,7 +1525,10 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
         let shSin = 0, shCos = 0, shN = 0, hiSin = 0, hiCos = 0, hiN = 0;
         let warmCount = 0, coolCount = 0, neutralCount = 0;
         for (const el of vis) {
-            for (const c of [el.color, el.bg]) {
+            // Include SVG fill in temperature classification — star icons, illustrations,
+            // and decorative SVG shapes carry warm/cool hues via fill, not color/bg.
+            const colorSamples = el.fill ? [el.color, el.bg, el.fill] : [el.color, el.bg];
+            for (const c of colorSamples) {
                 const [h, s, l] = rgbToHsl(c[0], c[1], c[2]);
                 if (s < 0.1) { neutralCount++; continue; }
                 const angle = h * 2 * Math.PI;
@@ -1502,11 +1624,13 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
         );
         const estCharsPerLine = (e) => e.rect.w / (e.fontSize * charWidthFactor);
         const tooWide = bodyText.filter(e => estCharsPerLine(e) > maxChars);
-        // Only count elements tall enough to hold at least 5 wrapped lines —
-        // multi-column feature-card captions (2–4 lines) are intentionally short-form
-        // and should not be counted as a reading-flow problem.
+        // Only count elements tall enough to hold at least 5 wrapped lines AND
+        // containing substantial text (200+ chars) — short cards, labels, and nav
+        // captions are intentionally brief and are not a reading-flow problem.
         const tooNarrow = bodyText.filter(e =>
-            estCharsPerLine(e) < minChars && e.rect.h > e.fontSize * 5
+            estCharsPerLine(e) < minChars &&
+            e.rect.h > e.fontSize * 5 &&
+            (e.textContent || '').trim().length >= 200
         );
 
         let lineFindingPushed = false;
@@ -1739,7 +1863,9 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
         // A design with all buttons at the same visual weight has no way to
         // communicate which action is the recommended or primary choice.
         {
-            const solidBtns = vis.filter(e => e.tag === 'button' && e.rect.w > 40 && e.rect.h > 20);
+            // Exclude fixed-position floating action buttons (FABs) — high z-index buttons
+            // like CI/CD balloons and feedback triggers are overlays, not page-level CTAs.
+            const solidBtns = vis.filter(e => e.tag === 'button' && e.rect.w > 40 && e.rect.h > 20 && e.zIndex < 100);
             if (solidBtns.length >= 4) {
                 const btnLumas = solidBtns.map(e => luma(e.bg[0], e.bg[1], e.bg[2]));
                 const minL = Math.min(...btnLumas);
@@ -1747,7 +1873,12 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                 const btnLumaRange = maxL - minL;
                 const btnHues = solidBtns.map(e => rgbToHsl(e.bg[0], e.bg[1], e.bg[2])[0]);
                 const hueRange = Math.max(...btnHues) - Math.min(...btnHues);
-                if (btnLumaRange < 0.15 && hueRange < 0.08) {
+                // Suppress when all identical-looking buttons sit within the same 30% vertical
+                // slice of the page — this indicates a form/widget UI (segmented control, mode
+                // selector, disabled submit) rather than independent page-level CTAs.
+                const btnYPositions = solidBtns.map(e => e.rect.y + e.rect.h / 2);
+                const btnYSpread = Math.max(...btnYPositions) - Math.min(...btnYPositions);
+                if (btnLumaRange < 0.15 && hueRange < 0.08 && btnYSpread > vpH * 0.30) {
                     findings.push({
                         id: nid(),
                         category: 'Visual Hierarchy',
@@ -1796,10 +1927,15 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
     // Source: typography research — optimal body text line height is 1.4–1.6×
     // Below 1.3× lines are too tight; above 2.2× they become visually disconnected.
     {
+        let headingLHFired = false; // shared flag between Sub-check C and Sub-check E
+        // Require 200+ characters of actual text content so that short cards,
+        // labels, and nav items — which are intentionally compact — do not trigger
+        // line-height warnings designed for multi-line body prose.
         const bodyForLH = textEls.filter(e =>
             e.fontSize >= 13 && e.fontSize <= 22 &&
             e.rect.w >= 200 &&
-            e.lineHeight > 0
+            e.lineHeight > 0 &&
+            (e.textContent || '').trim().length >= 200
         );
         if (bodyForLH.length >= 4) {
             const tooTight = bodyForLH.filter(e => (e.lineHeight / e.fontSize) < 1.3);
@@ -1850,6 +1986,7 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
             if (headingLHEls.length >= 2) {
                 const tooLooseHeadings = headingLHEls.filter(e => (e.lineHeight / e.fontSize) > 1.45);
                 if (tooLooseHeadings.length >= 2) {
+                    headingLHFired = true;
                     const worst = tooLooseHeadings.reduce((a, b) =>
                         (b.lineHeight / b.fontSize) > (a.lineHeight / a.fontSize) ? b : a
                     );
@@ -1911,9 +2048,11 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
         // Source: Refactoring UI — large display text should use tight leading (~1.0–1.2×).
         // Applying body-text line height (1.4–1.6×) to oversized headings creates awkward
         // vertical gaps between lines that look unpolished and "accidentally spaced".
+        // Only fires if Sub-check C (h1/h2/h3 heading line-height) did NOT already fire —
+        // the two checks overlap on the same elements and firing both is redundant.
         {
             const displayTextEls = textEls.filter(e => e.fontSize > 32 && e.lineHeight > 0);
-            if (displayTextEls.length >= 2) {
+            if (displayTextEls.length >= 2 && !headingLHFired) {
                 const looseDisplay = displayTextEls.filter(e => (e.lineHeight / e.fontSize) > 1.4);
                 if (looseDisplay.length >= 2) {
                     const worst = looseDisplay.reduce((a, b) =>
@@ -2035,7 +2174,12 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                         const a = sortedIA[i], b = sortedIA[j];
                         const hGap = Math.max(0, Math.max(a.rect.x, b.rect.x) - Math.min(a.rect.x + a.rect.w, b.rect.x + b.rect.w));
                         const vGap = Math.max(0, Math.max(a.rect.y, b.rect.y) - Math.min(a.rect.y + a.rect.h, b.rect.y + b.rect.h));
-                        const gap = Math.min(hGap, vGap);
+                        // When elements fully overlap horizontally (hGap=0), the meaningful
+                        // separation is vertical (e.g. full-width stacked form fields).
+                        // Math.min(0, vGap) would always return 0 — a false zero-gap reading.
+                        const gap = (hGap === 0 && vGap > 0) ? vGap
+                                  : (vGap === 0 && hGap > 0) ? hGap
+                                  : Math.min(hGap, vGap);
                         if (gap >= 8 || gap < 0) continue;
                         // Exclude inline navigation text-link pairs — two <a> tags in the same
                         // horizontal row with visible text labels are an intentional nav-strip
@@ -2047,6 +2191,21 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                             (a.textContent || '').length >= 2 &&
                             (b.textContent || '').length >= 2;
                         if (sameLinkRow) continue;
+                        // Exclude icon-only adjacent <a> links in the same row
+                        // (e.g., social media nav icons: LinkedIn/Twitter). These have empty
+                        // textContent and are deliberately placed close together as a group.
+                        const sameIconLinkRow = a.tag === 'a' && b.tag === 'a' &&
+                            Math.abs((a.rect.y + a.rect.h / 2) - (b.rect.y + b.rect.h / 2)) < Math.min(a.rect.h, b.rect.h) * 0.6 &&
+                            (a.textContent || '').length < 2 &&
+                            (b.textContent || '').length < 2;
+                        if (sameIconLinkRow) continue;
+                        // Exclude segmented-control / tab-strip button pairs — two sibling
+                        // buttons in the same horizontal row separated by ≤2px are an
+                        // intentional component separator, not a proximity hazard.
+                        const sameButtonSegment = a.tag === 'button' && b.tag === 'button' &&
+                            Math.abs((a.rect.y + a.rect.h / 2) - (b.rect.y + b.rect.h / 2)) < Math.min(a.rect.h, b.rect.h) * 0.4 &&
+                            hGap <= 2;
+                        if (sameButtonSegment) continue;
                         tooClose.push({ a, b, gap });
                     }
                 }
@@ -2668,7 +2827,15 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                     // A gap centred in the middle 60% of the viewport is the standard
                     // "brand left / links right" split-nav pattern — intentional by design.
                     const gapCentreX = (maxEntry.a.rect.x + maxEntry.a.rect.w + maxEntry.b.rect.x) / 2;
-                    const isIntentionalSplit = gapCentreX > vpW * 0.20 && gapCentreX < vpW * 0.80;
+                    // A gap whose centre falls in the middle 60% of the viewport is the
+                    // standard "brand-left / links-right" space-between nav pattern —
+                    // intentional by design. Suppress the finding entirely for these.
+                    // 15% threshold (was 20%) to also catch cases where the gap falls
+                    // between a left-anchored nav item and a centred hero element whose
+                    // block-level left edge starts at the content margin (~344px / 1440px = 23.9%
+                    // content, but gap *centre* lands around 17% of viewport width).
+                    const isIntentionalSplit = gapCentreX > vpW * 0.15 && gapCentreX < vpW * 0.85;
+                    if (!isIntentionalSplit) {
                     const aLabel = elQ(maxEntry.a);
                     const bLabel = elQ(maxEntry.b);
                     const groupDesc = (aLabel && bLabel)
@@ -2681,12 +2848,13 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                     findings.push({
                         id: nid(),
                         category: 'Spacing & Layout',
-                        severity: (!isIntentionalSplit && ratio >= 12) ? 'warning' : 'info',
+                        severity: ratio >= 12 ? 'warning' : 'info',
                         element: `Navigation row has a gap ${groupDesc} — ${Math.round(ratio)}× larger than the typical ${Math.round(median)}px spacing between items`,
-                        issue: `The top navigation row has one unusually large gap (${Math.round(maxEntry.gap)}px) while all other inter-item spaces are around ${Math.round(median)}px. A ratio of ${Math.round(ratio)}× means the navigation visually splits into two disconnected groups. Even if this is intentional (brand name left, utility links right), the implicit gap alone does not communicate that structure — visitors may perceive an uneven or unfinished layout rather than a deliberate two-group composition.`,
-                        recommendation: `If the large gap is intentional (e.g. left-aligned links / right-aligned CTA), reinforce the split explicitly: add a visual divider, use a differently-styled group, or apply \`justify-content: space-between\` only at the group level. If the gap is unintentional, use a flex container with uniform \`gap\` so inter-item spacing stays consistent throughout the row.`,
+                        issue: `The top navigation row has one unusually large gap (${Math.round(maxEntry.gap)}px) while all other inter-item spaces are around ${Math.round(median)}px. A ratio of ${Math.round(ratio)}× means the navigation visually splits into two disconnected groups, which visitors may perceive as an uneven or unfinished layout rather than a deliberate composition.`,
+                        recommendation: `Use a flex container with uniform \`gap\` so inter-item spacing stays consistent throughout the row. If two groups are intentional, place them in separate containers rather than relying on an implicit spacer gap.`,
                         boundingBox: toBBox(maxEntry.a.rect, vpW, vpH),
                     });
+                    }
                 }
             }
         }
@@ -2753,12 +2921,14 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
     // than ~30% it breaks the implied column grid, so the eye detects the ragged
     // right edge as disorder rather than intentional asymmetry.
     {
+        const navStripBottom = vpH * 0.14; // ignore top-nav/header region
         // Find elements with the same (or very similar) left edge
         const colCandidates = vis.filter(e =>
             (e.isText || e.isInteractive) &&
             e.rect.w >= 80 && e.rect.h >= 12 &&
             e.rect.w < vpW * 0.75 &&
-            e.rect.y < vpH * 0.85
+            e.rect.y < vpH * 0.85 &&
+            (e.rect.y + e.rect.h / 2) > navStripBottom
         );
         // Bucket by left edge (within 20px tolerance)
         /** @type {Map<number, typeof colCandidates>} */
@@ -2912,6 +3082,15 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
 
         if (textOnImg.length >= 2) {
             const worst = textOnImg.reduce((a, b) => a.fontSize < b.fontSize ? a : b);
+            const boxedOnImg = textOnImg.filter(el => {
+                const pad = (el.paddingTop || 0) + (el.paddingBottom || 0) + (el.paddingLeft || 0) + (el.paddingRight || 0);
+                const bg = el.bg || [255, 255, 255, 1];
+                const isNearWhite = bg[0] > 245 && bg[1] > 245 && bg[2] > 245;
+                const isNearBlack = bg[0] < 20 && bg[1] < 20 && bg[2] < 20;
+                const hasVisibleBgTone = !(isNearWhite || isNearBlack);
+                return pad >= 6 || (el.rect.h >= el.fontSize * 1.45 && hasVisibleBgTone);
+            });
+            const likelyBoxedTextOverImage = boxedOnImg.length >= 1 && (boxedOnImg.length / textOnImg.length) >= 0.4;
             const zone = zoneDesc(worst.rect.x + worst.rect.w / 2, worst.rect.y + worst.rect.h / 2, vpW, vpH);
             const worstQuote = elQ(worst);
             findings.push({
@@ -2921,8 +3100,12 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                 element: worstQuote
                     ? `${textOnImg.length} text element${textOnImg.length !== 1 ? 's' : ''} over image areas — e.g. ${worstQuote} (${Math.round(worst.fontSize)}px, ${zone})`
                     : `${textOnImg.length} text element${textOnImg.length !== 1 ? 's' : ''} placed over image or pattern areas (smallest: ${Math.round(worst.fontSize)}px, ${zone})`,
-                issue: `${textOnImg.length} text element${textOnImg.length !== 1 ? 's' : ''} are positioned over image or patterned-background areas. CSS colour values alone cannot confirm legibility here — the image beneath the text contains pixel variations that may create low-contrast regions directly under letterforms. This is especially problematic for small text and for images with mid-tone, textured, or busy patterns. Readers often need to squint or re-read text that falls over such areas.`,
-                recommendation: `Protect text legibility over images with one of: (1) a semi-transparent dark or light scrim placed behind the text (e.g. rgba(0,0,0,0.4)); (2) a text-shadow or drop-shadow matching the text colour's luminance; (3) repositioning text to a solid-colour area adjacent to the image; (4) a solid-colour badge or pill background behind the text. The scrim approach is most robust for photographic content.`,
+                issue: likelyBoxedTextOverImage
+                    ? `${textOnImg.length} text element${textOnImg.length !== 1 ? 's' : ''} are positioned over image or patterned-background areas. CSS colour values alone cannot confirm legibility here — the image beneath the text contains pixel variations that may create low-contrast regions directly under letterforms. This is especially problematic for small text and for images with mid-tone, textured, or busy patterns. Readers often need to squint or re-read text that falls over such areas. Some of these text elements appear to already sit inside a solid-colour box/badge; this reduces risk but does not fully guarantee readability in all image regions.`
+                    : `${textOnImg.length} text element${textOnImg.length !== 1 ? 's' : ''} are positioned over image or patterned-background areas. CSS colour values alone cannot confirm legibility here — the image beneath the text contains pixel variations that may create low-contrast regions directly under letterforms. This is especially problematic for small text and for images with mid-tone, textured, or busy patterns. Readers often need to squint or re-read text that falls over such areas.`,
+                recommendation: likelyBoxedTextOverImage
+                    ? `Because parts of this text already use a solid-colour box/badge treatment, first standardize that pattern: keep a consistent, sufficiently opaque background behind all over-image text and verify APCA contrast against the badge colour. If any labels still blend into bright image zones, add a subtle overlay behind the image area as a second layer of protection.`
+                    : `Protect text legibility over images with one of: (1) a semi-transparent dark or light scrim placed behind the text (e.g. rgba(0,0,0,0.4)); (2) a text-shadow or drop-shadow matching the text colour's luminance; (3) repositioning text to a solid-colour area adjacent to the image; (4) a solid-colour badge or pill background behind the text. The scrim approach is most robust for photographic content.`,
                 boundingBox: toBBox(worst.rect, vpW, vpH),
             });
         }

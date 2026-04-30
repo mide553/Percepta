@@ -9,24 +9,29 @@
 	/* white cards float above bg */
 	--surface-2: #f9f9fa;
 	/* barely-off-white panels */
-	--surface-3: #efeff1;
-	/* inputs, canvas bg */
-	--border: #e4e4e7;
-	/* zinc-200 */
-	--border-subtle: #ececee;
-	--nav-bg: #eaeaec;
-	/* between bg and surface */
+	--surface-3: #e8e8f1;
+	/* inputs, canvas bg — visibly distinct from surface */
+	--border: #cacace;
+	/* subtle but defined on white surfaces */
+	--border-subtle: #dcdcdf;
+	--nav-bg: #e0e0e3;
+	/* gently distinct from page bg */
 	--text: #09090b;
 	/* zinc-950  — 18.7:1 on white ✓ AAA */
 	--text-2: #3f3f46;
 	/* zinc-700  — 10.2:1 on white ✓ AAA */
 	--text-3: #71717a;
 	/* zinc-500  —  4.6:1 on white ✓ AA  */
-	--text-4: #a1a1aa;
-	/* zinc-400  — decorative/secondary */
+	--text-4: #767676;
+	/* 4.5:1 on white ✓ AA  — secondary labels */
 	--text-5: #d4d4d8;
 	/* zinc-300  — muted decorative */
 	--active-finding-bg: #eef2ff;
+	--accent-label: #2563eb;
+	--warn-text: #92400e;
+	/* amber-800 — 7:1 on white ✓ AAA */
+	--info-text: #1d4ed8;
+	/* blue-700  — 7.5:1 on white ✓ AAA */
 }
 
 [data-theme="dark"] {
@@ -62,6 +67,17 @@
 	/* decorative separators/dots only */
 
 	--active-finding-bg: #1e1e2e;
+	--accent-label: #60a5fa;
+	--warn-text: #fbbf24;
+	/* amber-400 — 9.6:1 on dark ✓ AAA */
+	--info-text: #60a5fa;
+	/* blue-400  — fine on dark */
+
+	/* Ensure all elements inherit light text colour on the dark surface.
+	   Without this, elements without explicit colour rules inherit the
+	   browser default black (#000000), which is invisible on dark surfaces
+	   and triggers false-positive "near-black text on dark bg" findings. */
+	color: var(--text);
 
 	/* Background image */
 	--page-bg-image: url('/percepta-background.svg');
@@ -69,8 +85,10 @@
 
 /* ── Navbar ───────────────────────────────────────────────────── */
 .app-nav {
-	background: var(--nav-bg);
-	border-bottom: 1px solid #c4c4cc;
+	background: rgba(255, 255, 255, 0.72);
+	backdrop-filter: blur(14px);
+	-webkit-backdrop-filter: blur(14px);
+	border-bottom: 1px solid var(--border);
 	padding: 0 32px;
 	height: 56px;
 	display: flex;
@@ -82,6 +100,9 @@
 }
 
 [data-theme="dark"] .app-nav {
+	background: var(--nav-bg);
+	backdrop-filter: none;
+	-webkit-backdrop-filter: none;
 	border-bottom-color: var(--border-subtle);
 }
 

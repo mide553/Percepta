@@ -1,4 +1,4 @@
-﻿import { error } from '@sveltejs/kit';
+import { error } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { SYSTEM_PROMPT, ALGO_AI_PROMPT } from '$lib/ai/prompt.js';
 import { BOOK_KNOWLEDGE } from '$lib/ai/bookKnowledge.js';
@@ -14,7 +14,7 @@ const VP_W = 1440;
 /**
  * Strip internal AI-instruction sentences from a bookImage desc so it reads
  * as a plain user-facing caption.  Sentences that start with imperative
- * directives ("show this only if …", "used to show how …", "together with …",
+ * directives ("show this only if �", "used to show how �", "together with �",
  * etc.) are removed; the remaining descriptive sentences are joined and
  * returned.  If nothing survives the filter the original string is returned
  * unchanged so the fallback is never empty.
@@ -29,7 +29,7 @@ function cleanCaption(desc) {
 		/^show this\b/i,
 		/^show only\b/i,
 		/^show if\b/i,
-		/^shown\b/i,        // "shown with …", "shown only when …", "shown together …"
+		/^shown\b/i,        // "shown with �", "shown only when �", "shown together �"
 		/^together with\b/i,
 		/^only show\b/i,
 	];
@@ -38,7 +38,7 @@ function cleanCaption(desc) {
 }
 const VP_H = 900;
 
-// Singleton browser — shared across all requests, one isolated context per request.
+// Singleton browser � shared across all requests, one isolated context per request.
 /** @type {import('puppeteer').Browser | null} */
 let _browser = null;
 
@@ -125,13 +125,13 @@ Use this technical context to provide more informed recommendations about the vi
 			await new Promise(r => setTimeout(r, 4000 * Math.pow(3, attempt - 1)));
 		}
 		const _attemptT = Date.now();
-		console.log(`[Percepta:perf] callGemini attempt ${attempt + 1}/3 — sending request...`);
+		console.log(`[Percepta:perf] callGemini attempt ${attempt + 1}/3 � sending request...`);
 		const response = await fetch(geminiUrl, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body
 		});
-		console.log(`[Percepta:perf] callGemini attempt ${attempt + 1}/3 — response ${response.status} in ${Date.now() - _attemptT}ms`);
+		console.log(`[Percepta:perf] callGemini attempt ${attempt + 1}/3 � response ${response.status} in ${Date.now() - _attemptT}ms`);
 		if (response.ok) {
 			const data = await response.json();
 			const text = data.candidates?.[0]?.content?.parts
@@ -193,13 +193,15 @@ function checkImageConditionAgainstFinding(imageDesc, findingText, findingCatego
 		// Images
 		{ pattern: /user-uploaded image/i, keywords: ['image', 'photo', 'upload', 'gallery'] },
 		{ pattern: /\d\+ avatars/i, keywords: ['avatar', 'profile picture', 'user image'] },
-		{ pattern: /text.*photo|text.*image/i, keywords: ['text on photo', 'text on image', 'overlay'] },
+		{ pattern: /text.*photo|text.*image/i, keywords: ['text on photo', 'text on image', 'text over photo', 'text over image', 'over image', 'over photo', 'overlay', 'low-contrast', 'contrast'] },
 		// Typography
 		{ pattern: /text.*relative unit.*em/i, keywords: ['em unit', 'relative unit', 'responsive text'] },
 		{ pattern: /paragraph.*\d\+ lines/i, keywords: ['paragraph', 'long text', 'body text'] },
 		{ pattern: /line.*90-110 char/i, keywords: ['line length', 'character count', 'wide text'] },
 		// Layout
 		{ pattern: /element.*lot of text.*spacing.*small/i, keywords: ['tight spacing', 'cramped', 'padding'] },
+		{ pattern: /spacing between these elements is too random|spacing.*too random/i, keywords: ['spacing values', 'different spacing', 'inconsistent spacing', 'random spacing', 'too many spacing'] },
+		{ pattern: /arbitrary font size choices|defined type scale|typographic hierarchy/i, keywords: ['font size', 'type scale', 'typographic hierarchy', 'inconsistent hierarchy', 'arbitrary'] },
 		{ pattern: /input.*spread out/i, keywords: ['form', 'input', 'stretched', 'wide'] },
 		{ pattern: /article.*section.*heading/i, keywords: ['article', 'section', 'heading'] },
 		{ pattern: /bulleted list/i, keywords: ['list', 'bullet', 'ul', 'li'] },
@@ -221,8 +223,8 @@ function checkImageConditionAgainstFinding(imageDesc, findingText, findingCatego
 		// Background
 		{ pattern: /\d\+.*element.*white background/i, keywords: ['background', 'panel', 'card', 'section'] },
 		{ pattern: /\d\+.*same background.*section/i, keywords: ['section', 'background', 'panel'] },
-		// Split layout (horizontal balance)
-		{ pattern: /split layout|left-right|one side.*heavier/i, keywords: ['split', 'two column', 'left-right', 'horizontal', 'balance'] },
+		// Split layout (left-right column balance only � NOT for top-bar or vertical imbalance)
+		{ pattern: /split layout|left-right column|left-right.*imbalance/i, keywords: ['split', 'two column', 'left-right', 'column', 'split-screen'] },
 	];
 
 	// Check if we can verify the condition
@@ -245,8 +247,38 @@ function checkImageConditionAgainstFinding(imageDesc, findingText, findingCatego
 	return true;
 }
 
+/**
+ * Detect spacing findings that describe inconsistent/random spacing scale usage
+ * (e.g. "67 different spacing values"). These should map to image102/image105.
+ * @param {{ category?: string, issue?: string, recommendation?: string, element?: string }} finding
+ */
+function isSpacingScaleVarianceFinding(finding) {
+	if (finding.category !== 'Spacing & Layout') return false;
+	const text = `${finding.issue || ''} ${finding.recommendation || ''} ${finding.element || ''}`.toLowerCase();
+	return (
+		/(\d+)\s+different\s+spacing\s+values/.test(text) ||
+		/different\s+spacing\s+values/.test(text) ||
+		/inconsistent\s+spacing\s+creates\s+a\s+disjointed\s+visual\s+rhythm/.test(text) ||
+		/random\s+spacing/.test(text) ||
+		/spacing\s+scale/.test(text)
+	);
+}
+
+/**
+ * Detect text-on-image readability findings (regular and boxed variants).
+ * For this issue family, constrain examples to image225/image227/image230.
+ * @param {{ category?: string, issue?: string, recommendation?: string, element?: string }} finding
+ */
+function isTextOverImageFinding(finding) {
+	if (finding.category !== 'Readability') return false;
+	const text = `${finding.issue || ''} ${finding.recommendation || ''} ${finding.element || ''}`.toLowerCase();
+	return /over image areas|placed over image|patterned-background areas|text element.*over image|text over a photo/.test(text);
+}
+
 async function callGeminiWithFindings(apiKey, findings, overallScore, codeContext = null) {
-	const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+	const spacingScaleFindingIds = new Set(
+		findings.filter(isSpacingScaleVarianceFinding).map(f => f.id)
+	);
 
 	const categoriesPresent = [...new Set(findings.map(f => f.category))];
 	const bookKnowledgeContext = Object.fromEntries(
@@ -260,7 +292,7 @@ async function callGeminiWithFindings(apiKey, findings, overallScore, codeContex
 	if (codeContext) {
 		codeContextSummary = `
 
-CODE CONTEXT — Use this technical information about the website's implementation to enrich your analysis:
+CODE CONTEXT � Use this technical information about the website's implementation to enrich your analysis:
 
 CSS (${codeContext.css.stylesheets.length} stylesheets):
 - ${codeContext.css.colors.length} unique colors: ${codeContext.css.colors.slice(0, 8).join(', ')}${codeContext.css.colors.length > 8 ? '...' : ''}
@@ -270,7 +302,7 @@ CSS (${codeContext.css.stylesheets.length} stylesheets):
 - ${codeContext.css.inlineStyles.length} elements with inline styles
 
 HTML Structure:
-- Semantic elements: <header>×${codeContext.html.semanticElements.header}, <nav>×${codeContext.html.semanticElements.nav}, <main>×${codeContext.html.semanticElements.main}, <footer>×${codeContext.html.semanticElements.footer}
+- Semantic elements: <header>�${codeContext.html.semanticElements.header}, <nav>�${codeContext.html.semanticElements.nav}, <main>�${codeContext.html.semanticElements.main}, <footer>�${codeContext.html.semanticElements.footer}
 - ${codeContext.html.headings.length} headings (h1: ${codeContext.html.headings.filter(h => h.level === 1).length})
 - ${codeContext.html.images.length} images (${codeContext.html.altTextMissing} missing alt text)
 - ${codeContext.html.forms.length} forms, ${codeContext.html.links.length} links
@@ -296,32 +328,42 @@ ${codeContextSummary}
 IMAGE SELECTION GUIDE
 
 Each finding has an "availableImages" array. Each entry has:
-  src   — exact filename to use in bookImages
-  desc  — description that may include a condition ("show this only if X")
-  pair  — (optional) companion image for before/after sets
+  src   � exact filename to use in bookImages
+  desc  � description that may include a condition ("show this only if X")
+  pair  � (optional) companion image for before/after sets
 
-SELECTION PROCESS — for each available image:
+SELECTION PROCESS � for each available image:
 
 1. If the desc contains "show this only if X" or "only if X":
-   - Does the finding's issue MENTION or CLEARLY IMPLY X? If yes → select.
-   - Does the finding's topic broadly match X even if not stated verbatim? If yes → select.
+   - Does the finding's issue MENTION or CLEARLY IMPLY X? If yes ? select.
+   - Does the finding's topic broadly match X even if not stated verbatim? If yes ? select.
    - Only skip if the condition is clearly about something the finding does NOT involve at all.
 
-2. If the desc has no "only if" condition → select when it closely matches the finding's topic.
+2. If the desc has no "only if" condition ? select when it closely matches the finding's topic.
 
-3. PAIRING: if you select an image that has a "pair" field → also include the pair partner.
+3. PAIRING: if you select an image that has a "pair" field ? also include the pair partner.
 
-4. "shown only with imageXX" → only include as a pair partner, not independently.
+4. "shown only with imageXX" ? only include as a pair partner, not independently.
 
 AIM to select 1-3 images per finding when relevant images are available. It is better to include a relevant image than to leave bookImages empty.
 
 For each selected image, return an object with:
-  src     — the exact filename
-  caption — a 1-2 sentence direct statement about what this image demonstrates in context of this finding. Start with the action or observation directly (e.g. "A small high-contrast button can counterbalance a much larger photo in a split layout."). Do NOT start with "This image shows", "This shows", or any meta-phrase. Do NOT copy the desc verbatim.`;
+  src     � the exact filename
+  caption � a 1-2 sentence direct statement about what this image demonstrates in context of this finding. Start with the action or observation directly (e.g. "A small high-contrast button can counterbalance a much larger photo in a split layout."). Do NOT start with "This image shows", "This shows", or any meta-phrase. Do NOT copy the desc verbatim.`;
 
 	const findingsWithImages = findings.map(f => {
+		if (f.noImages) return { ...f, availableImages: [] };
+		const isSpacingScaleVariance = isSpacingScaleVarianceFinding(f);
+		const isTextOverImage = isTextOverImageFinding(f);
 		const available = BOOK_IMAGES
 			.filter(img => img.tags.includes(f.category))
+			// Deterministic routing for spacing image pair selection.
+			.filter(img => {
+				if (isTextOverImage) return img.src === 'image225.png' || img.src === 'image227.png' || img.src === 'image230.png';
+				if (f.category !== 'Spacing & Layout') return true;
+				if (isSpacingScaleVariance) return img.src === 'image102.png' || img.src === 'image105.png';
+				return img.src !== 'image102.png' && img.src !== 'image105.png';
+			})
 			// Pre-filter by checking basic conditions against finding text
 			.filter(img => checkImageConditionAgainstFinding(img.desc, f.issue, f.category))
 			.map(({ src, desc, pair }) => {
@@ -354,79 +396,115 @@ For each selected image, return an object with:
 	console.log(`[Percepta:perf] callGeminiWithFindings body size: ${(body.length / 1024).toFixed(1)} KB`);
 
 	const RETRYABLE = new Set([429, 500, 502, 503, 504]);
-	let lastErr = /** @type {Error | null} */ (null);
 
-	for (let attempt = 0; attempt < 3; attempt++) {
-		if (attempt > 0) {
-			await new Promise(r => setTimeout(r, 4000 * Math.pow(3, attempt - 1)));
-		}
-		const _attemptT = Date.now();
-		console.log(`[Percepta:perf] callGeminiWithFindings attempt ${attempt + 1}/3 — sending request (${findings.length} findings)...`);
-		const response = await fetch(geminiUrl, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body,
-			signal: AbortSignal.timeout(90_000),
-		});
-		console.log(`[Percepta:perf] callGeminiWithFindings attempt ${attempt + 1}/3 — response ${response.status} in ${Date.now() - _attemptT}ms`);
-		if (response.ok) {
-			const data = await response.json();
-			const text = data.candidates?.[0]?.content?.parts
-				?.map((/** @type {{ text?: string }} */ p) => p.text ?? '').join('') ?? '';
-			console.log('[Percepta] raw Gemini findings text:', text.slice(0, 300));
-			const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
-			const result = JSON.parse(cleaned);
-			if (Array.isArray(result.findings)) {
-				// First pass: resolve & validate images per finding
-				result.findings = result.findings.map(f => {
-					const rawImages = Array.isArray(f.bookImages) ? f.bookImages : [];
-					console.log(`[Percepta] Gemini selected ${rawImages.length} images for finding ${f.id}`);
-					const captionMap = new Map();
-					for (const item of rawImages) {
-						if (item && typeof item === 'object' && typeof item.src === 'string' && BOOK_IMAGE_MAP[item.src]) {
-							captionMap.set(item.src, item.caption || cleanCaption(BOOK_IMAGE_MAP[item.src].desc));
-						} else if (typeof item === 'string' && BOOK_IMAGE_MAP[item]) {
-							captionMap.set(item, cleanCaption(BOOK_IMAGE_MAP[item].desc));
-						}
-					}
-					// Auto-add missing pair partners
-					for (const src of [...captionMap.keys()]) {
-						const partner = BOOK_IMAGE_MAP[src].pair;
-						if (partner && BOOK_IMAGE_MAP[partner] && !captionMap.has(partner)) {
-							captionMap.set(partner, cleanCaption(BOOK_IMAGE_MAP[partner].desc));
-						}
-					}
-					const bookImages = [...captionMap.entries()].map(([src, caption]) => ({ src, caption }));
-					return { ...f, bookImages };
-				});
-
-				// Second pass: deduplicate — each image may only appear in one finding
-				const usedImages = new Set();
-				result.findings = result.findings.map(f => {
-					const deduped = (f.bookImages ?? []).filter(img => {
-						if (usedImages.has(img.src)) return false;
-						usedImages.add(img.src);
-						return true;
-					});
-					if (deduped.length !== (f.bookImages ?? []).length) {
-						console.log(`[Percepta] Finding ${f.id}: deduplicated ${(f.bookImages ?? []).length} -> ${deduped.length} images`);
-					}
-					return { ...f, bookImages: deduped };
-				});
-
-				// Log final image count summary
-				const finalCounts = result.findings.map(f => `${f.id}: ${(f.bookImages ?? []).length}`).join(', ');
-				console.log(`[Percepta] Final bookImages per finding: ${finalCounts}`);
+	/** @param {string} modelId @param {string} reqBody @returns {Promise<any>} */
+	async function tryModel(modelId, reqBody) {
+		const spacingScaleForcedImgs = ['image102.png', 'image105.png'];
+		const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`;
+		let lastErr = /** @type {Error | null} */ (null);
+		for (let attempt = 0; attempt < 3; attempt++) {
+			if (attempt > 0) {
+				await new Promise(r => setTimeout(r, 4000 * Math.pow(3, attempt - 1)));
 			}
-			return result;
+			const _attemptT = Date.now();
+			console.log(`[Percepta:perf] callGeminiWithFindings(${modelId}) attempt ${attempt + 1}/3 � sending request (${findings.length} findings)...`);
+			const response = await fetch(url, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: reqBody,
+				signal: AbortSignal.timeout(90_000),
+			});
+			console.log(`[Percepta:perf] callGeminiWithFindings(${modelId}) attempt ${attempt + 1}/3 � response ${response.status} in ${Date.now() - _attemptT}ms`);
+			if (response.ok) {
+				const data = await response.json();
+				const text = data.candidates?.[0]?.content?.parts
+					?.map((/** @type {{ text?: string }} */ p) => p.text ?? '').join('') ?? '';
+				console.log(`[Percepta] raw ${modelId} findings text:`, text.slice(0, 300));
+				const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+				const result = JSON.parse(cleaned);
+				if (Array.isArray(result.findings)) {
+					// First pass: resolve & validate images per finding
+					result.findings = result.findings.map(f => {
+						const rawImages = Array.isArray(f.bookImages) ? f.bookImages : [];
+						console.log(`[Percepta] ${modelId} selected ${rawImages.length} images for finding ${f.id}`);
+						const captionMap = new Map();
+						for (const item of rawImages) {
+							if (item && typeof item === 'object' && typeof item.src === 'string' && BOOK_IMAGE_MAP[item.src]) {
+								captionMap.set(item.src, item.caption || cleanCaption(BOOK_IMAGE_MAP[item.src].desc));
+							} else if (typeof item === 'string' && BOOK_IMAGE_MAP[item]) {
+								captionMap.set(item, cleanCaption(BOOK_IMAGE_MAP[item].desc));
+							}
+						}
+						// Auto-add missing pair partners
+						for (const src of [...captionMap.keys()]) {
+							const partner = BOOK_IMAGE_MAP[src].pair;
+							if (partner && BOOK_IMAGE_MAP[partner] && !captionMap.has(partner)) {
+								captionMap.set(partner, cleanCaption(BOOK_IMAGE_MAP[partner].desc));
+							}
+						}
+						// Enforce spacing-scale exemplar pair for CSS003-style findings.
+						if (spacingScaleFindingIds.has(f.id)) {
+							for (const src of spacingScaleForcedImgs) {
+								if (BOOK_IMAGE_MAP[src] && !captionMap.has(src)) {
+									captionMap.set(src, cleanCaption(BOOK_IMAGE_MAP[src].desc));
+								}
+							}
+						}
+						const bookImages = [...captionMap.entries()].map(([src, caption]) => ({ src, caption }));
+						return { ...f, bookImages };
+					});
+					// Second pass: deduplicate — each image may only appear in one finding.
+					// Priority findings (spacing-scale variance) keep their forced images first.
+					const usedImages = new Set();
+					const ordered = [...result.findings].sort((a, b) => {
+						const ap = spacingScaleFindingIds.has(a.id) ? 1 : 0;
+						const bp = spacingScaleFindingIds.has(b.id) ? 1 : 0;
+						return bp - ap;
+					});
+					const dedupedById = new Map();
+					for (const f of ordered) {
+						const deduped = (f.bookImages ?? []).filter(img => {
+							if (usedImages.has(img.src)) return false;
+							usedImages.add(img.src);
+							return true;
+						});
+						if (deduped.length !== (f.bookImages ?? []).length) {
+							console.log(`[Percepta] Finding ${f.id}: deduplicated ${(f.bookImages ?? []).length} -> ${deduped.length} images`);
+						}
+						dedupedById.set(f.id, deduped);
+					}
+					result.findings = result.findings.map(f => ({ ...f, bookImages: dedupedById.get(f.id) || [] }));
+					const finalCounts = result.findings.map(f => `${f.id}: ${(f.bookImages ?? []).length}`).join(', ');
+					console.log(`[Percepta] Final bookImages per finding: ${finalCounts}`);
+				}
+				return result;
+			}
+			const isRetryable = RETRYABLE.has(response.status);
+			const errBody = await response.json().catch(() => ({}));
+			const msg = errBody.error?.message ?? `Gemini API error ${response.status}`;
+			lastErr = new Error(msg);
+			if (!isRetryable) break;
 		}
-		const isRetryable = RETRYABLE.has(response.status);
-		const errBody = await response.json().catch(() => ({}));
-		const msg = errBody.error?.message ?? `Gemini API error ${response.status}`;
-		lastErr = new Error(msg);
-		if (!isRetryable) break;
+		throw lastErr ?? new Error(`${modelId} request failed`);
 	}
-	throw lastErr ?? new Error('Gemini request failed');
+
+	// Try primary model (gemini-2.5-flash, thinking disabled for speed)
+	try {
+		return await tryModel('gemini-2.5-flash', body);
+	} catch (primaryErr) {
+		console.warn(`[Percepta] gemini-2.5-flash failed (${primaryErr.message}), trying gemini-2.0-flash fallback...`);
+	}
+
+	// Fallback: gemini-2.0-flash � older model, higher availability, no thinkingConfig
+	const fallbackBody = JSON.stringify({
+		system_instruction: { parts: [{ text: systemInstruction }] },
+		contents: [{ parts: [{ text: bodyPayload }] }],
+		generationConfig: {
+			maxOutputTokens: 16384,
+			responseMimeType: 'application/json',
+		}
+	});
+	return await tryModel('gemini-2.0-flash', fallbackBody);
 }
 
 /** @type {import('./$types').RequestHandler} */
@@ -482,7 +560,7 @@ export async function POST({ request }) {
 				}
 				_perf('page loaded');
 
-				// ── Dismiss cookie/GDPR popups ────────────────────────────────────────
+				// -- Dismiss cookie/GDPR popups ----------------------------------------
 				// 1. Click common "accept" buttons by visible text
 				await page.evaluate(async () => {
 					const ACCEPT_TEXTS = [
@@ -505,7 +583,7 @@ export async function POST({ request }) {
 					}
 				});
 
-				// 2. Remove remaining popups — specific known frameworks + safe heuristics only
+				// 2. Remove remaining popups � specific known frameworks + safe heuristics only
 				await page.evaluate(() => {
 					const KNOWN_SELECTORS = [
 						// OneTrust
@@ -583,7 +661,7 @@ export async function POST({ request }) {
 				const screenshotDataUrl = `data:image/png;base64,${screenshotB64}`;
 				_perf('screenshot captured');
 
-				// ── Extract and analyze CSS, HTML, and JavaScript ──────────────────────
+				// -- Extract and analyze CSS, HTML, and JavaScript ----------------------
 				send({ type: 'step', step: 2 });
 				const cssAnalysis = await extractAndAnalyzeCSS(page);
 				const htmlAnalysis = await extractAndAnalyzeHTML(page);
@@ -613,10 +691,11 @@ export async function POST({ request }) {
 						 */
 						function getEffectiveBg(el) {
 							let cur = el;
-							while (cur && cur !== document.documentElement) {
+							while (cur) {
 								const bg = window.getComputedStyle(cur).backgroundColor;
 								const parsed = parseColor(bg);
 								if (parsed[3] > 0.05) return parsed;
+								if (cur === document.documentElement) break;
 								cur = /** @type {Element} */ (cur.parentElement);
 							}
 							return [255, 255, 255, 1];
@@ -663,7 +742,7 @@ export async function POST({ request }) {
 									parseFloat(cs.borderLeftWidth) || 0
 								),
 								textTransform: cs.textTransform || 'none',
-								hasBackgroundImage: !!cs.backgroundImage && cs.backgroundImage !== 'none',
+								hasBackgroundImage: !!cs.backgroundImage && cs.backgroundImage !== 'none' && cs.backgroundImage.includes('url('),
 								opacity: parseFloat(cs.opacity) || 1,
 								isText: TEXT_TAGS.has(tag),
 								isInteractive: INTERACTIVE_TAGS.has(tag),
@@ -671,6 +750,7 @@ export async function POST({ request }) {
 									? (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80)
 									: '',
 								alt: tag === 'img' ? (el.getAttribute('alt') || '').trim() : '',
+								fill: (() => { const f = cs.fill; return (f && f !== 'none' && f !== '') ? parseColor(f) : null; })(),
 							});
 						}
 						return { elements: results, vpW: vW, vpH: vH };
@@ -723,10 +803,11 @@ export async function POST({ request }) {
 						 */
 						function getEffectiveBg(el) {
 							let cur = el;
-							while (cur && cur !== document.documentElement) {
+							while (cur) {
 								const bg = window.getComputedStyle(cur).backgroundColor;
 								const parsed = parseColor(bg);
 								if (parsed[3] > 0.05) return parsed;
+								if (cur === document.documentElement) break;
 								cur = /** @type {Element} */ (cur.parentElement);
 							}
 							return [255, 255, 255, 1];
@@ -773,7 +854,7 @@ export async function POST({ request }) {
 									parseFloat(cs.borderLeftWidth) || 0
 								),
 								textTransform: cs.textTransform || 'none',
-								hasBackgroundImage: !!cs.backgroundImage && cs.backgroundImage !== 'none',
+								hasBackgroundImage: !!cs.backgroundImage && cs.backgroundImage !== 'none' && cs.backgroundImage.includes('url('),
 								opacity: parseFloat(cs.opacity) || 1,
 								isText: TEXT_TAGS.has(tag),
 								isInteractive: INTERACTIVE_TAGS.has(tag),
@@ -781,6 +862,7 @@ export async function POST({ request }) {
 									? (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80)
 									: '',
 								alt: tag === 'img' ? (el.getAttribute('alt') || '').trim() : '',
+								fill: (() => { const f = cs.fill; return (f && f !== 'none' && f !== '') ? parseColor(f) : null; })(),
 							});
 						}
 						return { elements: results, vpW: vW, vpH: vH };
@@ -839,7 +921,7 @@ export async function POST({ request }) {
 						}
 					});
 				} else if (mode === 'compare-algo-ai') {
-					// compare-algo-ai: run algo, then ask AI to rewrite — return both for prose diff view
+					// compare-algo-ai: run algo, then ask AI to rewrite � return both for prose diff view
 					send({ type: 'step', step: 3 });
 					const { elements, vpW, vpH } = await page.evaluate(() => {
 						/** @param {string} str @returns {number[]} */
@@ -852,10 +934,11 @@ export async function POST({ request }) {
 						/** @param {Element} el @returns {number[]} */
 						function getEffectiveBg(el) {
 							let cur = el;
-							while (cur && cur !== document.documentElement) {
+							while (cur) {
 								const bg = window.getComputedStyle(cur).backgroundColor;
 								const parsed = parseColor(bg);
 								if (parsed[3] > 0.05) return parsed;
+								if (cur === document.documentElement) break;
 								cur = /** @type {Element} */ (cur.parentElement);
 							}
 							return [255, 255, 255, 1];
@@ -901,7 +984,7 @@ export async function POST({ request }) {
 									parseFloat(cs.borderLeftWidth) || 0
 								),
 								textTransform: cs.textTransform || 'none',
-								hasBackgroundImage: !!cs.backgroundImage && cs.backgroundImage !== 'none',
+								hasBackgroundImage: !!cs.backgroundImage && cs.backgroundImage !== 'none' && cs.backgroundImage.includes('url('),
 								opacity: parseFloat(cs.opacity) || 1,
 								isText: TEXT_TAGS.has(tag),
 								isInteractive: INTERACTIVE_TAGS.has(tag),
@@ -909,6 +992,7 @@ export async function POST({ request }) {
 									? (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80)
 									: '',
 								alt: tag === 'img' ? (el.getAttribute('alt') || '').trim() : '',
+								fill: (() => { const f = cs.fill; return (f && f !== 'none' && f !== '') ? parseColor(f) : null; })(),
 							});
 						}
 						return { elements: results, vpW: vW, vpH: vH };
@@ -1005,7 +1089,7 @@ export async function POST({ request }) {
 						}
 					});
 				} else {
-					// compare mode — run both algo and AI, return side-by-side with CSS/HTML/JS analysis
+					// compare mode � run both algo and AI, return side-by-side with CSS/HTML/JS analysis
 					send({ type: 'step', step: 3 });
 					const { elements, vpW, vpH } = await page.evaluate(() => {
 						/**
@@ -1025,10 +1109,11 @@ export async function POST({ request }) {
 						 */
 						function getEffectiveBg(el) {
 							let cur = el;
-							while (cur && cur !== document.documentElement) {
+							while (cur) {
 								const bg = window.getComputedStyle(cur).backgroundColor;
 								const parsed = parseColor(bg);
 								if (parsed[3] > 0.05) return parsed;
+								if (cur === document.documentElement) break;
 								cur = /** @type {Element} */ (cur.parentElement);
 							}
 							return [255, 255, 255, 1];
@@ -1075,7 +1160,7 @@ export async function POST({ request }) {
 									parseFloat(cs.borderLeftWidth) || 0
 								),
 								textTransform: cs.textTransform || 'none',
-								hasBackgroundImage: !!cs.backgroundImage && cs.backgroundImage !== 'none',
+								hasBackgroundImage: !!cs.backgroundImage && cs.backgroundImage !== 'none' && cs.backgroundImage.includes('url('),
 								opacity: parseFloat(cs.opacity) || 1,
 								isText: TEXT_TAGS.has(tag),
 								isInteractive: INTERACTIVE_TAGS.has(tag),
@@ -1083,6 +1168,7 @@ export async function POST({ request }) {
 									? (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80)
 									: '',
 								alt: tag === 'img' ? (el.getAttribute('alt') || '').trim() : '',
+								fill: (() => { const f = cs.fill; return (f && f !== 'none' && f !== '') ? parseColor(f) : null; })(),
 							});
 						}
 						return { elements: results, vpW: vW, vpH: vH };

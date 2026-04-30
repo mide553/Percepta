@@ -275,6 +275,10 @@
 		aria-hidden="true"
 		style="position:fixed;inset:-40px;pointer-events:none;z-index:0;background-image:{theme === 'dark' ? 'url(/percepta-background.svg)' : 'url(/percepta-background-light.svg)'};background-size:cover;background-position:center top;transform:translate({(mouseX - 0.5) * -32}px, {(mouseY - 0.5) * -24}px);transition:transform 0.25s cubic-bezier(0.25,0.46,0.45,0.94);will-change:transform;"
 	></div>
+	<!-- Light-mode overlay: adds a very subtle cool-blue tint to reduce harshness -->
+	{#if theme === 'light'}
+		<div aria-hidden="true" style="position:fixed;inset:0;pointer-events:none;z-index:0;background:rgba(99,112,200,0.08);"></div>
+	{/if}
 	<!-- Nav -->
 	<nav class="app-nav">
 		<div style="display:flex;align-items:center;gap:10px;">
@@ -331,17 +335,17 @@
 				style="border:none;cursor:pointer;padding:0;background:none;display:flex;align-items:center;gap:6px;"
 			>
 				<!-- Moon icon -->
-				<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{theme === 'dark' ? 'var(--text-3)' : 'var(--text-5)'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition:stroke 0.2s;flex-shrink:0;"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+				<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{theme === 'dark' ? 'var(--text-3)' : 'var(--text-4)'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition:stroke 0.2s;flex-shrink:0;"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
 				<!-- Track -->
 				<div style="position:relative;width:36px;height:20px;border-radius:10px;background:{theme === 'dark' ? 'var(--border)' : '#2563eb'};transition:background 0.25s;flex-shrink:0;">
 					<!-- Thumb -->
 					<div style="position:absolute;top:3px;left:{theme === 'dark' ? '3px' : '19px'};width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,0.35);transition:left 0.25s;"></div>
 				</div>
 				<!-- Sun icon -->
-				<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{theme === 'light' ? 'var(--text-3)' : 'var(--text-5)'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition:stroke 0.2s;flex-shrink:0;"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+				<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{theme === 'light' ? 'var(--text-2)' : 'var(--text-5)'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition:stroke 0.2s;flex-shrink:0;"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
 			</button>
-			<span style="font-size:12px;color:var(--text-4);">Login</span>
-			<span style="font-size:12px;color:var(--text-4);">Register</span>
+			<span style="font-size:12px;color:{theme === 'light' ? 'var(--text-2)' : 'var(--text-4)'}">Login</span>
+			<span style="font-size:12px;color:{theme === 'light' ? 'var(--text-2)' : 'var(--text-4)'}">Register</span>
 		</div>
 	</nav>
 
@@ -350,14 +354,14 @@
 			<!-- Hero -->
 			<div style="text-align:center;margin-bottom:48px;">
 				<p
-					style="font-size:12px;font-weight:600;color:#2563eb;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:12px;"
+					style="font-size:12px;font-weight:600;color:var(--accent-label);letter-spacing:0.1em;text-transform:uppercase;margin-bottom:12px;"
 				>
 					Perceptual UI Analysis
 				</p>
 				<h1
 					style="font-size:36px;font-weight:700;letter-spacing:-0.03em;line-height:1.15;color:var(--text);margin-bottom:14px;"
 				>
-					See what your users feel,<br />not just what they see.
+					Perceptual analysis for interfaces.<br />Algorithmic. Automated.
 				</h1>
 				<p style="font-size:15px;color:var(--text-3);line-height:1.6;max-width:480px;margin:0 auto;">
 					Paste a URL and Percepta audits your live UI for perceptual contrast, visual balance, colour
@@ -390,7 +394,7 @@
 						placeholder="https://yourapp.com"
 						disabled={loading}
 						onkeydown={(e) => { if (e.key === 'Enter' && url.trim() && !loading) analyse(); }}
-						style="flex:1;padding:12px 14px;border:1.5px solid var(--border);border-radius:12px;font-size:14px;font-family:inherit;color:var(--text);background:var(--surface-3);outline:none;transition:border-color 0.15s;"
+						style="flex:1;padding:12px 14px;border:1.5px solid var(--border);border-radius:12px;font-size:14px;font-family:inherit;color:var(--text);background:var(--surface);outline:none;transition:border-color 0.15s;"
 					/>
 					{#if url}
 						<button
@@ -410,7 +414,7 @@
 					style="padding:10px 12px;border:none;background:{mode === 'algo-ai' ? 'var(--surface)' : 'var(--surface-2)'};text-align:left;transition:background 0.15s;cursor:pointer;"
 				>
 					<p style="font-size:12px;font-weight:600;color:{mode === 'algo-ai' ? 'var(--text)' : 'var(--text-3)'};margin-bottom:2px;">Algorithmic</p>
-					<p style="font-size:10px;color:{mode === 'algo-ai' ? 'var(--text-3)' : 'var(--text-4)'}">Rule-based</p>
+					<p style="font-size:11px;color:{mode === 'algo-ai' ? 'var(--text-3)' : 'var(--text-4)'}">Rule-based</p>
 				</button>
 				<!-- AI Vision tab — coming soon -->
 				<button
@@ -419,9 +423,9 @@
 				>
 					<div style="display:flex;align-items:center;gap:5px;margin-bottom:2px;">
 						<p style="font-size:12px;font-weight:600;color:{mode === 'ai' ? 'var(--text-3)' : 'var(--text-4)'};margin:0;">AI Vision</p>
-						<span style="font-size:9px;font-weight:700;letter-spacing:0.06em;background:#fef3c7;color:#92400e;border:1px solid #fde68a;padding:1px 5px;border-radius:4px;text-transform:uppercase;">Soon</span>
+						<span style="font-size:11px;font-weight:700;letter-spacing:0.06em;background:#fef3c7;color:#92400e;border:1px solid #fde68a;padding:1px 5px;border-radius:4px;text-transform:uppercase;">Soon</span>
 					</div>
-					<p style="font-size:10px;color:var(--text-5);">Screenshot AI</p>
+					<p style="font-size:11px;color:var(--text-4);">Screenshot AI</p>
 				</button>
 			</div>
 
@@ -442,9 +446,9 @@
 			<button
 				onclick={analyse}
 				disabled={!url.trim() || loading || mode === 'ai'}
-				style="width:100%;padding:13px;border-radius:12px;border:none;background:{url.trim() && !loading && mode !== 'ai'
+				style="width:100%;padding:13px;border-radius:12px;border:1px solid {url.trim() && !loading && mode !== 'ai' ? 'transparent' : 'var(--border)'};background:{url.trim() && !loading && mode !== 'ai'
 					? mode === 'compare' || mode === 'algo-ai' || mode === 'compare-algo-ai' ? '#2563eb' : '#059669'
-					: 'var(--surface-3)'};color:{url.trim() && !loading && mode !== 'ai'
+					: 'var(--surface-2)'};color:{url.trim() && !loading && mode !== 'ai'
 					? '#fff'
 					: 'var(--text-4)'};font-size:14px;font-weight:600;letter-spacing:-0.01em;transition:all 0.2s;display:flex;align-items:center;justify-content:center;gap:8px;"
 			>
@@ -477,7 +481,7 @@
 					{#if elapsed > 40 && (mode === 'algo-ai' || mode === 'ai' || mode === 'compare' || mode === 'compare-algo-ai')}
 						<div style="margin-top:10px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:9px 14px;display:flex;align-items:center;gap:8px;">
 							<svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;"><circle cx="7" cy="7" r="6" stroke="#b45309" stroke-width="1.3"/><path d="M7 4v3.5M7 9.5v.5" stroke="#b45309" stroke-width="1.4" stroke-linecap="round"/></svg>
-							<p style="font-size:12px;color:#92400e;line-height:1.5;">The plain-language summary is taking longer than expected — your audit findings are unaffected.</p>
+							<p style="font-size:12px;color:#92400e;line-height:1.5;">Taking longer than usual — keep this tab open and results will appear automatically when ready.</p>
 						</div>
 					{/if}
 				</div>
@@ -521,7 +525,7 @@
 			<!-- Header -->
 			<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
 				<div>
-					<p style="font-size:12px;font-weight:600;color:#2563eb;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:4px;">Algorithmic vs AI</p>
+					<p style="font-size:12px;font-weight:600;color:var(--accent-label);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:4px;">Algorithmic vs AI</p>
 					<h2 style="font-size:24px;font-weight:700;letter-spacing:-0.03em;">Comparison Report</h2>
 				</div>
 				<button onclick={reset} style="background:var(--surface);border:1px solid var(--border);color:var(--text-2);font-size:13px;font-weight:500;padding:8px 16px;border-radius:10px;cursor:pointer;">New Audit</button>
@@ -669,8 +673,8 @@
 				<div style="background:#854d0e1a;border:1px solid #a16207;border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;gap:12px;align-items:flex-start;">
 					<svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;margin-top:2px;"><circle cx="7" cy="7" r="6" stroke="#b45309" stroke-width="1.3"/><path d="M7 4v3.5M7 9.5v.5" stroke="#b45309" stroke-width="1.4" stroke-linecap="round"/></svg>
 					<div>
-						<p style="font-size:13px;font-weight:600;color:#ca8a04;margin:0 0 4px;">Plain-language summary temporarily unavailable</p>
-						<p style="font-size:13px;color:var(--text-2);margin:0;line-height:1.5;">Gemini is currently overloaded, so the results are displayed as direct algorithmic output without simplified explanations or reference images. The analysis remains accurate, but the wording may be more technical and less user-friendly than usual.</p>
+						<p style="font-size:13px;font-weight:600;color:var(--warn-text);margin:0 0 4px;">Plain-language summary temporarily unavailable</p>
+						<p style="font-size:13px;color:var(--text-2);margin:0;line-height:1.5;">Gemini is currently overloaded, so the results are displayed as direct algorithmic output without simplified explanations or reference images. The analysis remains accurate, but the descriptions may be more technical than usual. For a more detailed analysis, you can try auditing the page again in a few minutes.</p>
 					</div>
 				</div>
 			{/if}
@@ -679,7 +683,7 @@
 				<div style="background:#1e3a5f1a;border:1px solid #2563eb55;border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;gap:12px;align-items:flex-start;">
 					<svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;margin-top:2px;"><circle cx="7" cy="7" r="6" stroke="#3b82f6" stroke-width="1.3"/><path d="M7 4v3.5M7 9.5v.5" stroke="#3b82f6" stroke-width="1.4" stroke-linecap="round"/></svg>
 					<div>
-						<p style="font-size:13px;font-weight:600;color:#60a5fa;margin:0 0 4px;">Reference images not available for this analysis</p>
+						<p style="font-size:13px;font-weight:600;color:var(--info-text);margin:0 0 4px;">Reference images not available for this analysis</p>
 						<p style="font-size:13px;color:var(--text-2);margin:0;line-height:1.5;">The AI ran successfully but did not find any book reference images that matched the findings closely enough. The written analysis and recommendations are still complete.</p>
 					</div>
 				</div>
@@ -812,7 +816,7 @@
 				<div style="background:#854d0e1a;border:1px solid #a16207;border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;gap:12px;align-items:flex-start;">
 					<svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;margin-top:2px;"><circle cx="7" cy="7" r="6" stroke="#b45309" stroke-width="1.3"/><path d="M7 4v3.5M7 9.5v.5" stroke="#b45309" stroke-width="1.4" stroke-linecap="round"/></svg>
 					<div>
-						<p style="font-size:13px;font-weight:600;color:#ca8a04;margin:0 0 4px;">Plain-language summary temporarily unavailable</p>
+						<p style="font-size:13px;font-weight:600;color:var(--warn-text);margin:0 0 4px;">Plain-language summary temporarily unavailable</p>
 						<p style="font-size:13px;color:var(--text-2);margin:0;line-height:1.5;">Gemini is currently overloaded, so the results are displayed as direct algorithmic output without simplified explanations or reference images. The analysis remains accurate, but the wording may be more technical and less user-friendly than usual.</p>
 					</div>
 				</div>
@@ -822,7 +826,7 @@
 				<div style="background:#1e3a5f1a;border:1px solid #2563eb55;border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;gap:12px;align-items:flex-start;">
 					<svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;margin-top:2px;"><circle cx="7" cy="7" r="6" stroke="#3b82f6" stroke-width="1.3"/><path d="M7 4v3.5M7 9.5v.5" stroke="#3b82f6" stroke-width="1.4" stroke-linecap="round"/></svg>
 					<div>
-						<p style="font-size:13px;font-weight:600;color:#60a5fa;margin:0 0 4px;">Reference images not available for this analysis</p>
+						<p style="font-size:13px;font-weight:600;color:var(--info-text);margin:0 0 4px;">Reference images not available for this analysis</p>
 						<p style="font-size:13px;color:var(--text-2);margin:0;line-height:1.5;">The AI ran successfully but did not find any book reference images that matched the findings closely enough. The written analysis and recommendations are still complete.</p>
 					</div>
 				</div>
@@ -953,7 +957,7 @@
 										>
 											<div style="display:flex;align-items:flex-start;gap:12px;">
 												<div
-													title={Array.isArray(f.boundingBox) ? 'Click to highlight on screenshot' : 'No specific location — applies to the whole page'}
+													title={Array.isArray(f.boundingBox) ? '' : 'No specific location — applies to the whole page'}
 															style="flex-shrink:0;margin-top:2px;background:{Array.isArray(f.boundingBox) ? c(cat) : 'var(--text-5)'};color:#fff;font-size:10px;font-weight:700;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;"
 												>
 													{f._idx + 1}
@@ -961,8 +965,6 @@
 												<div style="flex:1;min-width:0;">
 													<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;flex-wrap:wrap;">
 														<span style="font-size:11px;font-weight:600;color:{c(sev)};">{sev.label}</span>
-																<span style="font-size:11px;color:var(--text-5);">·</span>
-																<span style="font-size:11px;color:var(--text-4);">{f.element}</span>
 																<span style="font-size:11px;color:var(--text-5);margin-left:auto;">{f.id}</span>
 													</div>
 																<p style="font-size:13px;color:var(--text-2);line-height:1.55;margin-bottom:10px;">{f.issue}</p>
@@ -1067,7 +1069,7 @@
 			<p style="font-size:12px;color:var(--text-3);line-height:1.65;margin:0 0 12px;">Percepta is an open-source tool that can run headlessly inside your deployment pipeline. Trigger a design audit on every push and set a minimum score — if the score drops below your threshold, the build fails automatically.</p>
 			<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;">
 				<p style="font-size:10px;font-weight:700;color:var(--text-4);letter-spacing:0.08em;text-transform:uppercase;margin:0 0 6px;">Example pipeline step</p>
-				<code style="font-size:11px;color:#60a5fa;line-height:1.7;white-space:pre-wrap;display:block;">percepta audit \
+				<code style="font-size:11px;color:var(--accent-label);line-height:1.7;white-space:pre-wrap;display:block;">percepta audit \
   --url $DEPLOY_URL \
   --min-score 70</code>
 			</div>

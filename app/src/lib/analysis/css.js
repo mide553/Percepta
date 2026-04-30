@@ -18,6 +18,7 @@ export async function extractAndAnalyzeCSS(page) {
 			mediaQueries: [],
 			keyframes: [],
 			fonts: new Set(),
+			usedFonts: new Set(),
 			colors: new Set(),
 		};
 
@@ -65,9 +66,11 @@ export async function extractAndAnalyzeCSS(page) {
 								results.colors.add(value);
 							}
 
-							// Extract fonts
+							// Extract fonts — normalize to primary family name so "Inter, sans-serif"
+							// and '"Inter", sans-serif' don't count as separate entries.
 							if (prop === 'font-family') {
-								results.fonts.add(value);
+								const primary = value.split(',')[0].replace(/['"]/g, '').trim().toLowerCase();
+								if (primary) results.fonts.add(primary);
 							}
 						}
 
@@ -109,6 +112,16 @@ export async function extractAndAnalyzeCSS(page) {
 			}
 		});
 
+		// Extract fonts actually used by visible text-like elements in the viewport.
+		// This avoids overcounting every declared fallback stack in the stylesheet.
+		const textLikeEls = document.querySelectorAll('h1,h2,h3,h4,h5,h6,p,span,a,button,label,li,input,textarea,select');
+		textLikeEls.forEach(el => {
+			if (!isInViewport(el)) return;
+			const ff = window.getComputedStyle(el).fontFamily || '';
+			const primary = ff.split(',')[0].replace(/['"]/g, '').trim().toLowerCase();
+			if (primary) results.usedFonts.add(primary);
+		});
+
 		// Extract CSS variables
 		const rootStyles = window.getComputedStyle(document.documentElement);
 		for (let i = 0; i < rootStyles.length; i++) {
@@ -125,6 +138,7 @@ export async function extractAndAnalyzeCSS(page) {
 		return {
 			...results,
 			fonts: Array.from(results.fonts),
+			usedFonts: Array.from(results.usedFonts),
 			colors: Array.from(results.colors),
 		};
 	});
@@ -158,15 +172,17 @@ function analyzeCSS(cssData) {
 	}
 
 	// Analyze font families
-	const fonts = cssData.fonts;
-	if (fonts.length > 4) {
+	const definedFonts = cssData.fonts || [];
+	const usedFonts = cssData.usedFonts || [];
+	const fontMetric = usedFonts.length > 0 ? usedFonts.length : definedFonts.length;
+	if (fontMetric > 4) {
 		findings.push({
 			category: 'Typography',
 			severity: 'warning',
-			issue: `${fonts.length} different font families are defined. Using too many fonts creates visual inconsistency and slows page load.`,
+			issue: `${fontMetric} different font families are used in visible text. Using too many fonts creates visual inconsistency and slows page load.`,
 			recommendation: 'Limit to 2-3 font families maximum: one for headings, one for body text, and optionally one for monospace code.',
 		});
-	} else if (fonts.length <= 3) {
+	} else if (fontMetric <= 3) {
 		strengths.push('Font usage is restrained — limited to a focused set of typefaces.');
 	}
 
@@ -229,29 +245,6 @@ function analyzeCSS(cssData) {
 			severity: 'warning',
 			issue: `${importantCount} CSS rules use !important. Overusing !important indicates specificity problems and makes styles harder to override.`,
 			recommendation: 'Refactor CSS to use proper specificity instead of !important. Reserve !important only for utility classes.',
-		});
-	}
-
-	// Check for tight line-height values
-	const tightLineHeights = [];
-	cssData.stylesheets.forEach(sheet => {
-		sheet.rules.forEach(rule => {
-			const lineHeight = rule.styles['line-height'];
-			if (lineHeight && !lineHeight.includes('%') && !lineHeight.includes('px')) {
-				const numValue = parseFloat(lineHeight);
-				if (!isNaN(numValue) && numValue < 1.3) {
-					tightLineHeights.push({ selector: rule.selector, value: lineHeight });
-				}
-			}
-		});
-	});
-
-	if (tightLineHeights.length > 0) {
-		findings.push({
-			category: 'Typography',
-			severity: 'warning',
-			issue: `${tightLineHeights.length} rule${tightLineHeights.length !== 1 ? 's' : ''} with tight line-height (<1.3). Cramped line spacing reduces readability, especially for body text.`,
-			recommendation: 'Use line-height of 1.5-1.6 for body text. Headings can use 1.2-1.3. Example: body { line-height: 1.5; }',
 		});
 	}
 
@@ -358,6 +351,6 @@ function analyzeCSS(cssData) {
 		cssData,
 		findings,
 		strengths,
-		summary: `Analyzed ${cssData.stylesheets.length} stylesheets with ${colors.length} colors and ${fonts.length} font families.`,
+		summary: `Analyzed ${cssData.stylesheets.length} stylesheets with ${colors.length} colors and ${fontMetric} font families.`,
 	};
 }
