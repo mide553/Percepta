@@ -20,11 +20,11 @@
 	/* zinc-950  — 18.7:1 on white ✓ AAA */
 	--text-2: #3f3f46;
 	/* zinc-700  — 10.2:1 on white ✓ AAA */
-	--text-3: #71717a;
-	/* zinc-500  —  4.6:1 on white ✓ AA  */
-	--text-4: #767676;
-	/* 4.5:1 on white ✓ AA  — secondary labels */
-	--text-5: #d4d4d8;
+	--text-3: #5f5f68;
+	/* stronger secondary text contrast on light surfaces */
+	--text-4: #686872;
+	/* tertiary labels still readable on white */
+	--text-5: #a1a1aa;
 	/* zinc-300  — muted decorative */
 	--active-finding-bg: #eef2ff;
 	--accent-label: #2563eb;

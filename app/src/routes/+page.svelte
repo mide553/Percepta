@@ -109,6 +109,47 @@
 					: { label: 'Needs Work', color: '#ef4444', darkColor: '#fca5a5' }
 	);
 
+	/**
+	 * Build candidate filenames for a book image using common extensions.
+	 * This prevents broken images when catalog/file extensions drift.
+	 * @param {string} src
+	 */
+	function bookImageCandidates(src) {
+		const base = (src || '').replace(/\.(png|jpe?g|webp)$/i, '');
+		const candidates = [src, `${base}.png`, `${base}.jpg`, `${base}.jpeg`].filter(Boolean);
+		return [...new Set(candidates)];
+	}
+
+	/**
+	 * @param {string} src
+	 */
+	function bookImagePath(src) {
+		const first = bookImageCandidates(src)[0] || src;
+		return `/book-images/${first}`;
+	}
+
+	/**
+	 * @param {Event} evt
+	 */
+	function handleBookImageError(evt) {
+		const imgEl = /** @type {HTMLImageElement} */ (evt.currentTarget);
+		const rawSrc = imgEl.dataset.bookSrc || '';
+		const candidates = bookImageCandidates(rawSrc);
+		const currentTry = parseInt(imgEl.dataset.tryIdx || '0', 10);
+		const nextTry = currentTry + 1;
+
+		if (nextTry < candidates.length) {
+			imgEl.dataset.tryIdx = String(nextTry);
+			imgEl.src = `/book-images/${candidates[nextTry]}`;
+			return;
+		}
+
+		imgEl.style.display = 'none';
+		const wrap = imgEl.closest('[data-book-image-wrap]');
+		const fallback = wrap?.querySelector('[data-book-image-missing]');
+		if (fallback instanceof HTMLElement) fallback.style.display = 'block';
+	}
+
 	async function analyse() {
 		if (!url.trim()) return;
 		loading = true;
@@ -268,7 +309,7 @@
 
 <div
 	data-theme={theme}
-	style="min-height:100vh;background:var(--bg);color:var(--text);font-family:'Plus Jakarta Sans','Inter',sans-serif;position:relative;overflow:clip;"
+	style="min-height:100vh;background:var(--bg);color:var(--text);font-family:'Plus Jakarta Sans','Inter',sans-serif;position:relative;overflow:clip;display:flex;flex-direction:column;"
 >
 	<!-- Parallax background layer -->
 	<div
@@ -322,7 +363,10 @@
 					stroke-linecap="round"
 				/>
 			</svg>
-			<span style="font-weight:700;font-size:16px;letter-spacing:-0.02em;">Percepta</span>
+			<div style="display:flex;align-items:flex-end;gap:5px;">
+				<span style="font-weight:700;font-size:16px;letter-spacing:-0.02em;">Percepta</span>
+				<span style="font-size:11px;font-weight:700;letter-spacing:-0.02em;color:{theme === 'dark' ? 'var(--text-3)' : '#9ca3af'};line-height:1.6;">Beta</span>
+			</div>
 		</div>
 		<div style="display:flex;align-items:center;gap:12px;">
 			<!-- Theme toggle switch -->
@@ -342,14 +386,14 @@
 					<div style="position:absolute;top:3px;left:{theme === 'dark' ? '3px' : '19px'};width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,0.35);transition:left 0.25s;"></div>
 				</div>
 				<!-- Sun icon -->
-				<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{theme === 'light' ? 'var(--text-2)' : 'var(--text-5)'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition:stroke 0.2s;flex-shrink:0;"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+				<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{theme === 'light' ? 'var(--text-2)' : 'var(--text-4)'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition:stroke 0.2s;flex-shrink:0;"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
 			</button>
-			<span style="font-size:12px;color:{theme === 'light' ? 'var(--text-2)' : 'var(--text-4)'}">Login</span>
-			<span style="font-size:12px;color:{theme === 'light' ? 'var(--text-2)' : 'var(--text-4)'}">Register</span>
+			<span style="font-size:12px;color:{theme === 'light' ? 'var(--text-2)' : 'var(--text-3)'}">Login</span>
+			<span style="font-size:12px;color:{theme === 'light' ? 'var(--text-2)' : 'var(--text-3)'}">Register</span>
 		</div>
 	</nav>
 
-	<main style="max-width:{result || compareResult || compareAlgoAiResult ? '1400px' : '800px'};margin:0 auto;padding:48px 24px;transition:max-width 0.3s ease;position:relative;z-index:1;">
+	<main style="flex:1 0 auto;max-width:{result || compareResult || compareAlgoAiResult ? '1400px' : '800px'};width:100%;margin:0 auto;padding:48px 24px;transition:max-width 0.3s ease;position:relative;z-index:1;">
 		{#if !result && !compareResult && !compareAlgoAiResult}
 			<!-- Hero -->
 			<div style="text-align:center;margin-bottom:48px;">
@@ -414,18 +458,20 @@
 					style="padding:10px 12px;border:none;background:{mode === 'algo-ai' ? 'var(--surface)' : 'var(--surface-2)'};text-align:left;transition:background 0.15s;cursor:pointer;"
 				>
 					<p style="font-size:12px;font-weight:600;color:{mode === 'algo-ai' ? 'var(--text)' : 'var(--text-3)'};margin-bottom:2px;">Algorithmic</p>
-					<p style="font-size:11px;color:{mode === 'algo-ai' ? 'var(--text-3)' : 'var(--text-4)'}">Rule-based</p>
+					<p style="font-size:11px;color:{mode === 'algo-ai' ? 'var(--text-3)' : (theme === 'dark' ? 'var(--text-3)' : 'var(--text-4)')}">Rule-based</p>
 				</button>
 				<!-- AI Vision tab — coming soon -->
 				<button
-					onclick={() => (mode = 'ai')}
-					style="padding:10px 12px;border:none;background:{mode === 'ai' ? 'var(--surface)' : 'var(--surface-2)'};text-align:left;transition:background 0.15s;cursor:pointer;position:relative;"
+					disabled
+					aria-disabled="true"
+					title="AI audit is locked for now"
+					style="padding:10px 12px;border:none;background:var(--surface-2);text-align:left;transition:background 0.15s;cursor:not-allowed;position:relative;opacity:0.9;"
 				>
 					<div style="display:flex;align-items:center;gap:5px;margin-bottom:2px;">
-						<p style="font-size:12px;font-weight:600;color:{mode === 'ai' ? 'var(--text-3)' : 'var(--text-4)'};margin:0;">AI Vision</p>
+						<p style="font-size:12px;font-weight:600;color:{theme === 'dark' ? 'var(--text-3)' : 'var(--text-4)'};margin:0;">AI Vision</p>
 						<span style="font-size:11px;font-weight:700;letter-spacing:0.06em;background:#fef3c7;color:#92400e;border:1px solid #fde68a;padding:1px 5px;border-radius:4px;text-transform:uppercase;">Soon</span>
 					</div>
-					<p style="font-size:11px;color:var(--text-4);">Screenshot AI</p>
+					<p style="font-size:11px;color:{theme === 'dark' ? 'var(--text-3)' : 'var(--text-4)'};">Screenshot AI</p>
 				</button>
 			</div>
 
@@ -477,7 +523,7 @@
 					<div style="height:3px;border-radius:2px;background:var(--border);overflow:hidden;">
 						<div style="height:100%;width:{pct}%;background:#2563eb;border-radius:2px;transition:width 1.5s ease;"></div>
 					</div>
-					<p style="text-align:center;font-size:12px;color:var(--text-4);margin-top:8px;">{loadSteps[step]}</p>
+					<p style="text-align:center;font-size:12px;color:{theme === 'dark' ? 'var(--text-3)' : 'var(--text-4)'};margin-top:8px;">{loadSteps[step]}</p>
 					{#if elapsed > 40 && (mode === 'algo-ai' || mode === 'ai' || mode === 'compare' || mode === 'compare-algo-ai')}
 						<div style="margin-top:10px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:9px 14px;display:flex;align-items:center;gap:8px;">
 							<svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;"><circle cx="7" cy="7" r="6" stroke="#b45309" stroke-width="1.3"/><path d="M7 4v3.5M7 9.5v.5" stroke="#b45309" stroke-width="1.4" stroke-linecap="round"/></svg>
@@ -489,7 +535,7 @@
 
 			<!-- What gets checked -->
 			<div style="margin-top:48px;">
-				<p style="font-size:11px;font-weight:700;color:var(--text-4);letter-spacing:0.1em;text-transform:uppercase;margin-bottom:20px;text-align:center;">What gets checked</p>
+				<p style="font-size:11px;font-weight:700;color:{theme === 'dark' ? 'var(--text-3)' : 'var(--text-4)'};letter-spacing:0.1em;text-transform:uppercase;margin-bottom:20px;text-align:center;">What gets checked</p>
 				<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
 					{#each [
 						['Readability', 'Text contrast is measured using APCA — the perceptual model behind modern accessibility standards — checked against the actual background colour of each element.'],
@@ -617,14 +663,14 @@
 										{#if hasAlgo}
 											<span style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:#dcfce7;color:#059669;font-size:11px;font-weight:700;">{algoCount}</span>
 										{:else}
-											<span style="color:var(--text-5);">—</span>
+											<span style="color:var(--text-4);">—</span>
 										{/if}
 									</td>
 									<td style="text-align:center;padding:10px 16px;">
 										{#if hasAi}
 											<span style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:#dbeafe;color:#2563eb;font-size:11px;font-weight:700;">{aiCount}</span>
 										{:else}
-											<span style="color:var(--text-5);">—</span>
+											<span style="color:var(--text-4);">—</span>
 										{/if}
 									</td>
 									<td style="text-align:center;padding:10px 16px;color:var(--text-3);">{algoCount + aiCount}</td>
@@ -741,9 +787,9 @@
 					<div style="display:flex;align-items:center;gap:8px;padding:10px 16px;background:var(--surface-2);border-bottom:1px solid var(--border-subtle);flex-wrap:wrap;">
 							<span style="font-size:10px;font-weight:700;letter-spacing:0.06em;background:{c(cat)}1a;color:{c(cat)};padding:2px 7px;border-radius:5px;">{cat.short} · {algoF.category}</span>
 						<span style="font-size:11px;font-weight:600;color:{algoF.severity === 'critical' ? c(SEV.critical) : algoF.severity === 'warning' ? c(SEV.warning) : 'var(--text-3)'}">{algoF.severity}</span>
-						<span style="font-size:11px;color:var(--text-5);">·</span>
+						<span style="font-size:11px;color:var(--text-4);">·</span>
 						<span style="font-size:11px;color:var(--text-4);flex:1;">{algoF.element}</span>
-						<span style="font-size:11px;color:var(--text-5);">{algoF.id}</span>
+						<span style="font-size:11px;color:var(--text-4);">{algoF.id}</span>
 						</div>
 						<!-- Two-column prose diff -->
 						<div style="display:grid;grid-template-columns:1fr 1fr;">
@@ -764,7 +810,7 @@
 										<p style="font-size:12px;color:var(--text-2);line-height:1.5;">{aiF.recommendation}</p>
 									</div>
 								{:else}
-								<p style="font-size:12px;color:var(--text-5);font-style:italic;padding-top:4px;">No AI rewrite for this finding.</p>
+								<p style="font-size:12px;color:var(--text-4);font-style:italic;padding-top:4px;">No AI rewrite for this finding.</p>
 								{/if}
 							</div>
 						</div>
@@ -958,14 +1004,14 @@
 											<div style="display:flex;align-items:flex-start;gap:12px;">
 												<div
 													title={Array.isArray(f.boundingBox) ? '' : 'No specific location — applies to the whole page'}
-															style="flex-shrink:0;margin-top:2px;background:{Array.isArray(f.boundingBox) ? c(cat) : 'var(--text-5)'};color:#fff;font-size:10px;font-weight:700;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;"
+															style="flex-shrink:0;margin-top:2px;background:{Array.isArray(f.boundingBox) ? c(cat) : 'var(--text-4)'};color:#fff;font-size:10px;font-weight:700;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;"
 												>
 													{f._idx + 1}
 												</div>
 												<div style="flex:1;min-width:0;">
 													<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;flex-wrap:wrap;">
 														<span style="font-size:11px;font-weight:600;color:{c(sev)};">{sev.label}</span>
-																<span style="font-size:11px;color:var(--text-5);margin-left:auto;">{f.id}</span>
+																<span style="font-size:11px;color:var(--text-4);margin-left:auto;">{f.id}</span>
 													</div>
 																<p style="font-size:13px;color:var(--text-2);line-height:1.55;margin-bottom:10px;">{f.issue}</p>
 													<button
@@ -986,13 +1032,17 @@
 												{#if f.bookImages && f.bookImages.length > 0}
 													<div style="margin-top:10px;border-top:1px solid {c(cat)}25;padding-top:10px;display:flex;flex-direction:column;gap:12px;">
 																	{#each f.bookImages as img}
-																		<div>
+																		<div data-book-image-wrap>
 																			<img
-																				src="/book-images/{img.src}"
+																				src={bookImagePath(img.src)}
+																				data-book-src={img.src}
+																				data-try-idx="0"
 																				alt={img.caption}
 																				loading="lazy"
+																				onerror={handleBookImageError}
 																				style="width:92%;border-radius:6px;border:1px solid {c(cat)}25;display:block;background:#fff;"
 																			/>
+																			<p data-book-image-missing style="display:none;font-size:11px;color:var(--text-4);margin-top:5px;line-height:1.45;">Reference image unavailable in local assets.</p>
 																			<p style="font-size:11px;color:var(--text-3);margin-top:5px;line-height:1.45;">{img.caption}</p>
 																		</div>
 																	{/each}
@@ -1017,8 +1067,8 @@
 					<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">
 						{#each ['Strengths', 'Expert Note'] as label}
 							<div style="background:var(--surface-2);border:1px dashed var(--border);border-radius:12px;padding:20px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;min-height:80px;">
-								<p style="font-size:11px;font-weight:700;color:var(--text-5);letter-spacing:0.08em;text-transform:uppercase;">{label}</p>
-								<p style="font-size:12px;color:var(--text-5);">Coming soon</p>
+								<p style="font-size:11px;font-weight:700;color:var(--text-4);letter-spacing:0.08em;text-transform:uppercase;">{label}</p>
+								<p style="font-size:12px;color:var(--text-4);">Coming soon</p>
 							</div>
 						{/each}
 					</div>
@@ -1029,8 +1079,8 @@
 		{/if}
 	</main>
 
-	<footer style="text-align:center;padding:20px 24px;border-top:1px solid var(--border-subtle);margin-top:auto;">
-		<p style="font-size:11px;color:var(--text-4);">Percepta is a non-profit prototype developed as part of a Bachelor's thesis. Not intended for commercial use.</p>
+	<footer style="text-align:center;padding:20px 24px;border-top:1px solid var(--border-subtle);margin-top:auto;background:var(--surface);position:relative;z-index:2;">
+		<p style="font-size:11px;color:{theme === 'dark' ? 'var(--text-3)' : 'var(--text-4)'};">Percepta is a non-profit prototype developed as part of a Bachelor's thesis. Not intended for commercial use.</p>
 	</footer>
 
 	<!-- ── CI/CD info balloon ─────────────────────────────────────────────── -->
@@ -1099,7 +1149,7 @@
 		></div>
 
 		<!-- Drawer -->
-		<div style="position:fixed;right:0;top:0;bottom:0;width:380px;max-width:100vw;background:var(--bg);border-left:1px solid var(--border);z-index:1002;display:flex;flex-direction:column;overflow:hidden;box-shadow:-8px 0 40px rgba(0,0,0,0.18);">
+		<div style="position:fixed;right:0;top:0;bottom:0;width:500px;max-width:100vw;background:var(--bg);border-left:1px solid var(--border);z-index:1002;display:flex;flex-direction:column;overflow:hidden;box-shadow:-8px 0 40px rgba(0,0,0,0.18);">
 
 			<!-- Drawer header -->
 			<div style="display:flex;align-items:center;justify-content:space-between;padding:20px 22px;border-bottom:1px solid var(--border);flex-shrink:0;">
@@ -1137,7 +1187,7 @@
 
 					<div style="display:flex;flex-direction:column;gap:14px;">
 						<div>
-							<label style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Name <span style="color:var(--text-5);font-weight:400;">(optional)</span></label>
+							<label style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Name <span style="color:var(--text-4);font-weight:400;">(optional)</span></label>
 							<input
 								type="text"
 								bind:value={feedbackName}
@@ -1148,7 +1198,7 @@
 							/>
 						</div>
 						<div>
-							<label style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Role <span style="color:var(--text-5);font-weight:400;">(optional)</span></label>
+							<label style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Role <span style="color:var(--text-4);font-weight:400;">(optional)</span></label>
 							<input
 								type="text"
 								bind:value={feedbackRole}
@@ -1160,7 +1210,7 @@
 						</div>
 						<!-- Quick questionnaire -->
 						<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:14px;">
-							<p style="font-size:12px;font-weight:700;color:var(--text-2);margin:0;letter-spacing:-0.01em;">Quick Questions <span style="color:var(--text-5);font-weight:400;font-size:11px;">(optional)</span></p>
+							<p style="font-size:12px;font-weight:700;color:var(--text-2);margin:0;letter-spacing:-0.01em;">Quick Questions <span style="color:var(--text-4);font-weight:400;font-size:11px;">(optional)</span></p>
 
 							{#snippet ratingRow(label, value, setter, labels)}
 								<div>
@@ -1193,12 +1243,12 @@
 								disabled={feedbackStatus === 'sending'}
 								style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:13px;font-family:inherit;color:var(--text);background:var(--surface);outline:none;resize:vertical;min-height:120px;box-sizing:border-box;"
 							></textarea>
-							<p style="font-size:11px;color:var(--text-5);text-align:right;margin-top:3px;">{feedbackComment.length}/2000</p>
+							<p style="font-size:11px;color:var(--text-4);text-align:right;margin-top:3px;">{feedbackComment.length}/2000</p>
 						</div>
 
 						<!-- Optional: tested URLs + missed issues -->
 						<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:14px;">
-							<p style="font-size:12px;font-weight:700;color:var(--text-2);margin:0;letter-spacing:-0.01em;">Help us improve detection <span style="color:var(--text-5);font-weight:400;font-size:11px;">(optional)</span></p>
+							<p style="font-size:12px;font-weight:700;color:var(--text-2);margin:0;letter-spacing:-0.01em;">Help us improve detection <span style="color:var(--text-4);font-weight:400;font-size:11px;">(optional)</span></p>
 							<div>
 								<label style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Website(s) you tested</label>
 								<input
@@ -1209,7 +1259,7 @@
 									disabled={feedbackStatus === 'sending'}
 									style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:13px;font-family:inherit;color:var(--text);background:var(--surface-2);outline:none;box-sizing:border-box;"
 								/>
-								<p style="font-size:11px;color:var(--text-5);margin-top:3px;">Paste the URL of the site you ran through Percepta</p>
+								<p style="font-size:11px;color:var(--text-4);margin-top:3px;">Paste the URL of the site you ran through Percepta</p>
 							</div>
 							<div>
 								<label style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Issues Percepta missed</label>
@@ -1221,7 +1271,7 @@
 									disabled={feedbackStatus === 'sending'}
 									style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:13px;font-family:inherit;color:var(--text);background:var(--surface-2);outline:none;resize:vertical;min-height:90px;box-sizing:border-box;"
 								></textarea>
-								<p style="font-size:11px;color:var(--text-5);text-align:right;margin-top:3px;">{feedbackMissedIssues.length}/1000</p>
+								<p style="font-size:11px;color:var(--text-4);text-align:right;margin-top:3px;">{feedbackMissedIssues.length}/1000</p>
 							</div>
 						</div>
 
@@ -1248,3 +1298,4 @@
 	{/if}
 
 </div>
+

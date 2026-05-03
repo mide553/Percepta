@@ -1,4 +1,4 @@
-import { error } from '@sveltejs/kit';
+﻿import { error } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { SYSTEM_PROMPT, ALGO_AI_PROMPT } from '$lib/ai/prompt.js';
 import { BOOK_KNOWLEDGE } from '$lib/ai/bookKnowledge.js';
@@ -10,6 +10,91 @@ import { extractAndAnalyzeHTML } from '$lib/analysis/html.js';
 import { extractAndAnalyzeJS } from '$lib/analysis/js.js';
 
 const VP_W = 1440;
+const MAX_FINDINGS_PER_CATEGORY = 3;
+
+/**
+ * Strict allowlist of image examples to reduce false positives.
+ * Only checks that map to these desc-driven images remain active.
+ *
+ * @type {Record<string, Set<string>>}
+ */
+const ALLOWED_IMAGE_SRCS_BY_CATEGORY = {
+	'Readability': new Set([
+		'image183.jpg',
+		'image185.jpg',
+		'image122.jpg',
+		'image124.jpg',
+		'image225.png',
+	]),
+	'Visual Weight': new Set([
+		'image54.png',
+		'image55.png',
+		'image277.jpg',
+		'image281.jpg',
+		'image282.jpg',
+	]),
+	'Visual Hierarchy': new Set([
+		'image51.png',
+		'image52.png',
+		'image53.png',
+		'image58.png',
+		'image59.png',
+		'image127.png',
+		'image128.png',
+		'image129.png',
+		'image251.jpeg',
+	]),
+	'Typography': new Set([
+		'image14.jpg',
+		'image23.jpeg',
+		'image102.png',
+		'image112.jpg',
+		'image141.jpg',
+		'image132.jpg',
+		'image133.jpg',
+	]),
+	'Colour Palette': new Set([
+		'image37.png',
+		'image41.png',
+		'image151.jpeg',
+		'image153.png',
+		'image183.jpg',
+		'image180.png',
+		'image181.png',
+	]),
+	'Spacing & Layout': new Set([
+		'image63.jpeg',
+		'image65.jpeg',
+		'image72.png',
+		'image102.png',
+		'image105.png',
+	]),
+	'Interactive Targets': new Set([
+		'image58.png',
+		'image59.png',
+		'image94.png',
+		'image95.png',
+		'image205.png',
+		'image251.jpeg',
+	]),
+	'Icon & Image Size': new Set([
+		'image225.png',
+		'image227.png',
+		'image230.png',
+		'image233.jpg',
+		'image242.png',
+	]),
+};
+
+/**
+ * @param {string} category
+ * @param {string} src
+ */
+function isAllowedImageForCategory(category, src) {
+	const allowed = ALLOWED_IMAGE_SRCS_BY_CATEGORY[category];
+	if (!allowed) return false;
+	return allowed.has(src);
+}
 
 /**
  * Strip internal AI-instruction sentences from a bookImage desc so it reads
@@ -150,13 +235,93 @@ Use this technical context to provide more informed recommendations about the vi
 }
 
 /**
- * Pre-filter images by checking if basic conditions are met based on finding text.
+ * Pre-filter images by checking if basic conditions are met based on full finding context.
  * Returns true if the image should be kept (condition likely met or no clear condition).
  * Returns false if the condition is clearly not met.
  */
-function checkImageConditionAgainstFinding(imageDesc, findingText, findingCategory) {
+function checkImageConditionAgainstFinding(imageSrc, imageDesc, finding) {
 	const descLower = imageDesc.toLowerCase();
-	const textLower = findingText.toLowerCase();
+	const textLower = `${finding?.id || ''} ${finding?.category || ''} ${finding?.element || ''} ${finding?.issue || ''} ${finding?.recommendation || ''}`.toLowerCase();
+
+	const hasAny = (arr) => arr.some(k => textLower.includes(k));
+
+	// "shown only with imageXX" examples should not be selected directly.
+	// They are still included automatically when their paired primary image is selected.
+	if (/only with image\d+|only if image\d+ is shown/.test(descLower)) return false;
+
+	// Strict per-image guards for the currently active image-enabled checks.
+	// This enforces desc.txt-style "show only if" requirements.
+	const strictRules = {
+		'image122.jpg': () => hasAny(['paragraph', 'line spacing', 'line-height', 'tight spacing', 'text block']) && !hasAny(['button', 'link', 'nav', 'menu']),
+		'image124.jpg': () => hasAny(['paragraph', 'line spacing', 'line-height', 'tight spacing', 'text block']) && !hasAny(['button', 'link', 'nav', 'menu']),
+		'image225.png': () => hasAny(['text over image', 'text over photo', 'placed over image', 'photo', 'overlay', 'patterned background']) && hasAny(['contrast', 'hard to read', 'unreadable']),
+		'image227.png': () => hasAny(['text over image', 'text over photo', 'placed over image', 'photo', 'overlay', 'patterned background']) && hasAny(['contrast', 'hard to read', 'unreadable']),
+		'image230.png': () => hasAny(['text over image', 'text over photo', 'placed over image', 'photo', 'overlay', 'patterned background']) && hasAny(['contrast', 'hard to read', 'unreadable']),
+		'image183.jpg': () => hasAny(['contrast', 'hard to read', 'unreadable']) && hasAny(['text', 'background']),
+		'image185.jpg': () => hasAny(['contrast', 'hard to read', 'unreadable']) && hasAny(['text', 'background']),
+		'image54.png': () => hasAny(['icon']) && hasAny(['text', 'heavy', 'weight']),
+		'image55.png': () => hasAny(['icon']) && hasAny(['text', 'heavy', 'weight']),
+		'image277.jpg': () => hasAny(['split', 'left-right', 'two column', 'column']) && hasAny(['imbalance', 'heavy', 'weight']),
+		'image281.jpg': () => hasAny(['split', 'left-right', 'two column', 'column']) && hasAny(['imbalance', 'heavy', 'weight']),
+		'image282.jpg': () => hasAny(['split', 'left-right', 'two column', 'column']) && hasAny(['imbalance', 'heavy', 'weight']),
+		'image51.png': () => hasAny(['heading', 'h1', 'h2']) && hasAny(['oversized', 'too big', 'outweigh', 'hierarchy']),
+		'image52.png': () => hasAny(['heading', 'h1', 'h2']) && hasAny(['oversized', 'too big', 'outweigh', 'hierarchy']),
+		'image53.png': () => hasAny(['heading', 'h1', 'h2', 'hierarchy']),
+		'image58.png': () => hasAny(['button']) && hasAny(['same', 'equal', 'primary', 'secondary', 'tertiary', 'weight']),
+		'image59.png': () => hasAny(['button']) && hasAny(['same', 'equal', 'primary', 'secondary', 'tertiary', 'weight']),
+		'image127.png': () => hasAny(['link']) && hasAny(['indistinguishable', 'unstyled', 'blend', 'underline', 'same color', 'same colour']),
+		'image128.png': () => hasAny(['link']) && hasAny(['indistinguishable', 'unstyled', 'blend', 'underline', 'same color', 'same colour']),
+		'image129.png': () => hasAny(['link']) && hasAny(['indistinguishable', 'unstyled', 'blend', 'underline', 'same color', 'same colour']),
+		'image251.jpeg': () => hasAny(['link']) && hasAny(['indistinguishable', 'unstyled', 'blend', 'underline', 'same color', 'same colour']),
+		'image102.png': () => hasAny(['type scale', 'font size', 'typographic hierarchy', 'arbitrary', 'spacing scale', 'different spacing values', 'inconsistent spacing', 'random spacing']),
+		'image105.png': () => hasAny(['type scale', 'font size', 'typographic hierarchy', 'arbitrary', 'spacing scale', 'different spacing values', 'inconsistent spacing', 'random spacing']),
+		'image112.jpg': () => hasAny(['line length', 'characters per line', 'text block', 'too wide', '90', '110']),
+		'image132.jpg': () => hasAny(['center', 'centred', 'centered', 'alignment']) && hasAny(['line', 'paragraph', 'text']),
+		'image133.jpg': () => hasAny(['center', 'centred', 'centered', 'alignment']) && hasAny(['line', 'paragraph', 'text']),
+		'image141.jpg': () => hasAny(['all-caps', 'uppercase']) && hasAny(['letter-spacing', 'spacing']),
+		'image37.png': () => hasAny(['grey', 'gray']) && hasAny(['colored background', 'coloured background', 'tinted', 'card']),
+		'image41.png': () => hasAny(['grey', 'gray']) && hasAny(['colored background', 'coloured background', 'tinted', 'card']),
+		'image151.jpeg': () => hasAny(['palette', 'few colors', 'few colours', 'limited']) && hasAny(['color', 'colour', 'grey', 'gray']),
+		'image153.png': () => hasAny(['grey', 'gray', 'scale', 'shades']),
+		'image180.png': () => hasAny(['grey', 'gray']) && hasAny(['temperature', 'cool', 'warm', 'neutral']),
+		'image181.png': () => hasAny(['grey', 'gray']) && hasAny(['temperature', 'cool', 'warm', 'neutral']),
+		'image63.jpeg': () => hasAny(['cramped', 'compressed', 'tight spacing', 'padding', 'spacing']) && hasAny(['form', 'field', 'input', 'label', 'text']),
+		'image65.jpeg': () => hasAny(['cramped', 'compressed', 'tight spacing', 'padding', 'spacing']) && hasAny(['form', 'field', 'input', 'label', 'text']),
+		'image72.png': () => hasAny(['full-width', 'stretched', 'spread out', 'too wide', 'line lengths uncomfortable']),
+		'image94.png': () => hasAny(['too small', 'touch target', 'minimum size', '32x32', '31x19']),
+		'image95.png': () => hasAny(['too small', 'touch target', 'minimum size', '32x32', '31x19']),
+		'image205.png': () => hasAny(['button']) && hasAny(['shadow', 'raised', 'flat']),
+		'image233.jpg': () => hasAny(['icon']) && hasAny(['40+px', 'oversized', 'too large', 'scaled']),
+		'image242.png': () => hasAny(['aspect ratio', 'variable-height', 'card grid', 'grid alignment']),
+	};
+
+	if (strictRules[imageSrc] && !strictRules[imageSrc]()) return false;
+
+	// Hard gate for paragraph-specific examples: only allow when the finding is
+	// clearly about paragraph/body-text readability or paragraph line metrics.
+	const paragraphOnlyCondition =
+		/paragraph|body text|text area has\s*\d+\+?\s*characters|\d+\+?\s*lines/i.test(descLower);
+	if (paragraphOnlyCondition) {
+		const paragraphSignals = [
+			'paragraph',
+			'body text',
+			'line length',
+			'characters per line',
+			'lines longer than',
+			'text block',
+		];
+		const nonParagraphSignals = [
+			'button',
+			'link',
+			'nav',
+			'menu',
+			'icon',
+			'target',
+		];
+		const hasParagraphSignal = paragraphSignals.some(s => textLower.includes(s));
+		const hasNonParagraphSignal = nonParagraphSignals.some(s => textLower.includes(s));
+		if (!hasParagraphSignal || hasNonParagraphSignal) return false;
+	}
 
 	// Extract condition from "show this only if X" or "show this image only if X" patterns
 	const onlyIfMatch = descLower.match(/show this (?:image )?only if (.+?)(?:\.|$|together|shown)/);
@@ -197,7 +362,7 @@ function checkImageConditionAgainstFinding(imageDesc, findingText, findingCatego
 		// Typography
 		{ pattern: /text.*relative unit.*em/i, keywords: ['em unit', 'relative unit', 'responsive text'] },
 		{ pattern: /paragraph.*\d\+ lines/i, keywords: ['paragraph', 'long text', 'body text'] },
-		{ pattern: /line.*90-110 char/i, keywords: ['line length', 'character count', 'wide text'] },
+		{ pattern: /line.*90-110 char/i, keywords: ['line length', 'character count', 'wide text', 'characters per line'] },
 		// Layout
 		{ pattern: /element.*lot of text.*spacing.*small/i, keywords: ['tight spacing', 'cramped', 'padding'] },
 		{ pattern: /spacing between these elements is too random|spacing.*too random/i, keywords: ['spacing values', 'different spacing', 'inconsistent spacing', 'random spacing', 'too many spacing'] },
@@ -213,7 +378,7 @@ function checkImageConditionAgainstFinding(imageDesc, findingText, findingCatego
 		{ pattern: /graph/i, keywords: ['graph', 'chart', 'visualization', 'trend'] },
 		// Links
 		{ pattern: /link.*no styling/i, keywords: ['link', 'anchor', 'href'] },
-		{ pattern: /links.*indistinguishable|links.*unstyled|links.*lack.*visual|links.*blend/i, keywords: ['link', 'indistinguishable', 'unstyled', 'blend', 'body text'] },
+		{ pattern: /links.*indistinguishable|links.*unstyled|links.*lack.*visual|links.*blend/i, keywords: ['link', 'indistinguishable', 'unstyled', 'blend', 'body text', 'underline', 'same color', 'same colour'] },
 		// Interactive targets
 		{ pattern: /small.*interactive.*element|touch target.*minimum|element.*smaller.*32px|small.*touch target/i, keywords: ['element', 'button', 'target', 'touch', 'smaller', '32', 'px'] },
 		// Custom styling
@@ -225,6 +390,10 @@ function checkImageConditionAgainstFinding(imageDesc, findingText, findingCatego
 		{ pattern: /\d\+.*same background.*section/i, keywords: ['section', 'background', 'panel'] },
 		// Split layout (left-right column balance only � NOT for top-bar or vertical imbalance)
 		{ pattern: /split layout|left-right column|left-right.*imbalance/i, keywords: ['split', 'two column', 'left-right', 'column', 'split-screen'] },
+		// Centered text alignment (image132, image133)
+		{ pattern: /longer than two or three lines|elements.*more than.*lines.*center|if you want them to be more subtle/i, keywords: ['center', 'centred', 'centered', 'alignment', 'align'] },
+		// Warm/cool grey temperature (image180, image181)
+		{ pattern: /natural gray/i, keywords: ['gray', 'grey', 'desaturated', 'neutral', 'cool', 'warm', 'temperature', 'hue'] },
 	];
 
 	// Check if we can verify the condition
@@ -242,8 +411,11 @@ function checkImageConditionAgainstFinding(imageDesc, findingText, findingCatego
 		}
 	}
 
-	// Condition pattern not recognized or too complex to check algorithmically
-	// Let Gemini decide, but be conservative
+	// Condition pattern not recognized or too complex to check algorithmically.
+	// Stay conservative: allow only if the finding still shares core topical overlap.
+	if (finding?.category && !textLower.includes(String(finding.category).toLowerCase())) {
+		return hasAny(['text', 'button', 'link', 'spacing', 'heading', 'icon', 'image', 'color', 'colour', 'contrast']);
+	}
 	return true;
 }
 
@@ -275,12 +447,190 @@ function isTextOverImageFinding(finding) {
 	return /over image areas|placed over image|patterned-background areas|text element.*over image|text over a photo/.test(text);
 }
 
-async function callGeminiWithFindings(apiKey, findings, overallScore, codeContext = null) {
+/**
+ * Strictly keep only the issue families agreed for the current calibration phase.
+ * This removes "first checks win" behavior by eliminating unrelated findings
+ * before image selection and per-category capping.
+ * @param {{ category?: string, id?: string, issue?: string, recommendation?: string, element?: string, noImages?: boolean }} finding
+ */
+function isFindingInActiveScope(finding) {
+	if (!finding || typeof finding !== 'object') return false;
+	const category = finding.category || '';
+	const text = `${finding.id || ''} ${finding.issue || ''} ${finding.recommendation || ''} ${finding.element || ''}`.toLowerCase();
+	const hasAny = (arr) => arr.some(k => text.includes(k));
+	const isSparsePage = hasAny(['very little content', 'almost no visible content', 'near-empty pages', 'splash', 'coming-soon'])
+		&& hasAny(['characters', 'interactive element', 'main area']);
+
+	// Allow the sparse-page diagnostic even when it is intentionally image-free.
+	if (finding.noImages) return category === 'Visual Hierarchy' && isSparsePage;
+
+	if (category === 'Readability') {
+		const lowContrast = hasAny(['contrast', 'apca', 'hard to read', 'unreadable']) && hasAny(['text', 'button', 'link', 'background']);
+		const tightLeading = hasAny(['line-height', 'line height', 'tight line spacing', 'spaced too tightly']);
+		const textOnImage = hasAny(['text over image', 'text over photo', 'placed over image', 'overlay', 'scrim', 'photo']);
+		return lowContrast || tightLeading || textOnImage;
+	}
+
+	if (category === 'Visual Weight') {
+		const leftRightImbalance = hasAny(['left', 'right']) && hasAny(['imbalance', 'split', 'counterweight', 'column']);
+		const iconVsText = hasAny(['icon']) && hasAny(['text', 'heavy', 'weight']);
+		const dominantHero = hasAny(['dominant', 'hero', 'counterweight', 'gravitational pull']);
+		return leftRightImbalance || iconVsText || dominantHero;
+	}
+
+	if (category === 'Visual Hierarchy') {
+		const sparsePage = isSparsePage;
+		const oversizedHeadings = hasAny(['heading']) && hasAny(['oversized', 'too big', 'outweigh', 'visual weight']);
+		const equalButtonWeight = hasAny(['button']) && hasAny(['same', 'equal', 'primary', 'secondary', 'tertiary', 'weight']);
+		const linksBlendIn = hasAny(['link']) && hasAny(['indistinguishable', 'unstyled', 'blend', 'underline', 'same color', 'same colour']);
+		return sparsePage || oversizedHeadings || equalButtonWeight || linksBlendIn;
+	}
+
+	if (category === 'Typography') {
+		const typeScale = hasAny(['type scale', 'font size', 'typographic hierarchy', 'arbitrary']);
+		const longLineLength = hasAny(['line length', 'characters', 'too wide', '90', '110']);
+		const allCapsSpacing = hasAny(['all-caps', 'uppercase']) && hasAny(['letter-spacing', 'spacing']);
+		return typeScale || longLineLength || allCapsSpacing;
+	}
+
+	if (category === 'Colour Palette') {
+		const fewGreys = hasAny(['grey', 'gray']) && hasAny(['few', '1-2', 'three', '9-shade', 'scale']);
+		const grayOnColor = hasAny(['grey', 'gray']) && hasAny(['colored background', 'coloured background', 'tinted', 'card']);
+		const limitedPalette = hasAny(['limited', 'minimal', 'few colors', 'few colours', 'palette', 'only']) && hasAny(['color', 'colour', 'grey', 'gray']);
+		return fewGreys || grayOnColor || limitedPalette;
+	}
+
+	if (category === 'Spacing & Layout') {
+		const crampedInternal = hasAny(['cramped', 'compressed', 'too close', 'less than 8 pixels', 'tight spacing', 'padding']);
+		const overstretchedRows = hasAny(['full-width', 'stretched', 'spread out', 'too wide', 'line lengths uncomfortable']);
+		const spacingScale = hasAny(['spacing scale', 'different spacing values', 'inconsistent spacing', 'random spacing']);
+		return crampedInternal || overstretchedRows || spacingScale;
+	}
+
+	if (category === 'Interactive Targets') {
+		const tooSmall = hasAny(['too small', 'touch target', 'minimum size', '32x32', '31x19']);
+		const notDifferentiated = hasAny(['primary', 'secondary', 'tertiary', 'same weight', 'equal-weight', 'button styles']);
+		const tooClose = hasAny(['too close', 'no space', 'accidental taps', 'wrong item']);
+		return tooSmall || notDifferentiated || tooClose;
+	}
+
+	if (category === 'Icon & Image Size') {
+		const oversizedIcons = hasAny(['icon']) && hasAny(['40+px', 'oversized', 'too large', 'scaled']);
+		const mixedAspect = hasAny(['aspect ratio', 'variable-height', 'card grid', 'grid alignment']);
+		const textOverImage = hasAny(['text']) && hasAny(['image', 'photo', 'overlay']);
+		return oversizedIcons || mixedAspect || textOverImage;
+	}
+
+	return false;
+}
+
+/**
+ * @param {Array<any>} findings
+ */
+function filterFindingsToActiveScope(findings) {
+	return (findings || []).filter(isFindingInActiveScope);
+}
+
+/** @param {string} s */
+function firstQuotedText(s) {
+	if (typeof s !== 'string') return null;
+	const m = s.match(/'[^']{2,120}'/);
+	return m ? m[0] : null;
+}
+
+/** @param {string} s */
+function firstZoneLabel(s) {
+	if (typeof s !== 'string') return null;
+	const m = s.match(/\b(top|middle|bottom)-(left|centre|right)\b/i);
+	return m ? m[0].toLowerCase() : null;
+}
+
+/**
+ * Make sure rewritten prose still names the concrete text snippet that triggered the finding.
+ * This avoids vague messages like "one text area" with no anchor.
+ * @param {any} rewritten
+ * @param {any} original
+ */
+function preserveQuotedReference(rewritten, original) {
+	if (!rewritten || !original) return rewritten;
+	const source = `${original.issue || ''} ${original.element || ''}`;
+	const quote = firstQuotedText(source);
+	if (!quote) return rewritten;
+
+	const issue = typeof rewritten.issue === 'string' ? rewritten.issue : '';
+	const element = typeof rewritten.element === 'string' ? rewritten.element : '';
+	if (issue.includes(quote) || element.includes(quote)) return rewritten;
+
+	const zone = firstZoneLabel(source);
+	const suffix = zone
+		? ` The affected text is ${quote} in the ${zone}.`
+		: ` The affected text is ${quote}.`;
+	return { ...rewritten, issue: `${issue.trim()}${suffix}`.trim() };
+}
+
+/**
+ * @param {number} value
+ */
+function clamp01(value) {
+	if (!Number.isFinite(value)) return 0;
+	if (value < 0) return 0;
+	if (value > 1) return 1;
+	return value;
+}
+
+/**
+ * Lightweight confidence fallback when model omits confidence.
+ * @param {any} finding
+ */
+function inferConfidence(finding) {
+	let confidence = 0.85;
+	const severity = String(finding?.severity || '').toLowerCase();
+	if (severity === 'info') confidence *= 0.8;
+	if (severity === 'warning') confidence *= 0.9;
+
+	const text = `${finding?.element || ''} ${finding?.issue || ''}`;
+	const m = text.match(/\b(\d+)\b/);
+	const affectedCount = m ? parseInt(m[1], 10) : 0;
+	if (affectedCount > 0 && affectedCount < 3) confidence *= 0.75;
+
+	if (/\bfooter\b|\bbottom\b/i.test(text)) confidence *= 0.8;
+
+	return Math.round(clamp01(confidence) * 100) / 100;
+}
+
+/**
+ * Severity-aware AI gate thresholds. Higher-severity findings should not require
+ * the same confidence bar as informational polish findings.
+ * @param {{ severity?: string }} finding
+ */
+function confidenceThresholdForFinding(finding) {
+	const severity = String(finding?.severity || '').toLowerCase();
+	if (severity === 'critical') return 0.55;
+	if (severity === 'warning') return 0.65;
+	return 0.75;
+}
+
+/**
+ * Keep score math consistent with algorithmic.js but recompute from a provided
+ * findings list so UI score matches the actually displayed findings.
+ * @param {Array<{ severity?: string }>} findings
+ */
+function computeOverallScoreFromFindings(findings) {
+	const penalty = (findings || []).reduce(
+		(acc, f) => acc + (f.severity === 'critical' ? 12 : f.severity === 'warning' ? 7 : 3),
+		0
+	);
+	return Math.max(20, Math.min(95, 95 - Math.min(penalty, 70)));
+}
+
+async function callGeminiWithFindings(apiKey, findings, overallScore, codeContext = null, screenshotB64 = null) {
+	const scopedFindings = filterFindingsToActiveScope(findings);
+	const sourceById = new Map(scopedFindings.map(f => [f.id, f]));
 	const spacingScaleFindingIds = new Set(
-		findings.filter(isSpacingScaleVarianceFinding).map(f => f.id)
+		scopedFindings.filter(isSpacingScaleVarianceFinding).map(f => f.id)
 	);
 
-	const categoriesPresent = [...new Set(findings.map(f => f.category))];
+	const categoriesPresent = [...new Set(scopedFindings.map(f => f.category))];
 	const bookKnowledgeContext = Object.fromEntries(
 		categoriesPresent
 			.filter(cat => BOOK_KNOWLEDGE[cat])
@@ -351,12 +701,13 @@ For each selected image, return an object with:
   src     � the exact filename
   caption � a 1-2 sentence direct statement about what this image demonstrates in context of this finding. Start with the action or observation directly (e.g. "A small high-contrast button can counterbalance a much larger photo in a split layout."). Do NOT start with "This image shows", "This shows", or any meta-phrase. Do NOT copy the desc verbatim.`;
 
-	const findingsWithImages = findings.map(f => {
+	const findingsWithImages = scopedFindings.map(f => {
 		if (f.noImages) return { ...f, availableImages: [] };
 		const isSpacingScaleVariance = isSpacingScaleVarianceFinding(f);
 		const isTextOverImage = isTextOverImageFinding(f);
 		const available = BOOK_IMAGES
 			.filter(img => img.tags.includes(f.category))
+			.filter(img => isAllowedImageForCategory(f.category, img.src))
 			// Deterministic routing for spacing image pair selection.
 			.filter(img => {
 				if (isTextOverImage) return img.src === 'image225.png' || img.src === 'image227.png' || img.src === 'image230.png';
@@ -365,7 +716,7 @@ For each selected image, return an object with:
 				return img.src !== 'image102.png' && img.src !== 'image105.png';
 			})
 			// Pre-filter by checking basic conditions against finding text
-			.filter(img => checkImageConditionAgainstFinding(img.desc, f.issue, f.category))
+			.filter(img => checkImageConditionAgainstFinding(img.src, img.desc, f))
 			.map(({ src, desc, pair }) => {
 				/** @type {{ src: string, desc: string, pair?: string }} */
 				const entry = { src, desc };
@@ -381,11 +732,36 @@ For each selected image, return an object with:
 		return { ...f, availableImages: available };
 	});
 
-	const bodyPayload = JSON.stringify({ overallScore, findings: findingsWithImages, bookKnowledge: bookKnowledgeContext });
+	// Keep only findings backed by at least one allowed, desc-matching image,
+	// and cap each category to reduce noise.
+	const categoryCount = new Map();
+	const gatedFindingsWithImages = [];
+	for (const f of findingsWithImages) {
+		if (f.noImages) {
+			const prevNoImages = categoryCount.get(f.category) || 0;
+			if (prevNoImages >= MAX_FINDINGS_PER_CATEGORY) continue;
+			categoryCount.set(f.category, prevNoImages + 1);
+			gatedFindingsWithImages.push(f);
+			continue;
+		}
+		const availableCount = Array.isArray(f.availableImages) ? f.availableImages.length : 0;
+		if (availableCount === 0) continue;
+		const prev = categoryCount.get(f.category) || 0;
+		if (prev >= MAX_FINDINGS_PER_CATEGORY) continue;
+		categoryCount.set(f.category, prev + 1);
+		gatedFindingsWithImages.push(f);
+	}
+
+	console.log(`[Percepta] findings gated: ${findings.length} -> ${gatedFindingsWithImages.length} (max ${MAX_FINDINGS_PER_CATEGORY}/category)`);
+
+	const bodyPayload = JSON.stringify({ overallScore, findings: gatedFindingsWithImages, bookKnowledge: bookKnowledgeContext });
 	const body = JSON.stringify({
 		system_instruction: { parts: [{ text: systemInstruction }] },
 		contents: [{
-			parts: [{ text: bodyPayload }]
+			parts: [
+				...(screenshotB64 ? [{ inline_data: { mime_type: 'image/png', data: screenshotB64 } }] : []),
+				{ text: bodyPayload }
+			]
 		}],
 		generationConfig: {
 			maxOutputTokens: 16384,
@@ -407,7 +783,7 @@ For each selected image, return an object with:
 				await new Promise(r => setTimeout(r, 4000 * Math.pow(3, attempt - 1)));
 			}
 			const _attemptT = Date.now();
-			console.log(`[Percepta:perf] callGeminiWithFindings(${modelId}) attempt ${attempt + 1}/3 � sending request (${findings.length} findings)...`);
+			console.log(`[Percepta:perf] callGeminiWithFindings(${modelId}) attempt ${attempt + 1}/3 � sending request (${gatedFindingsWithImages.length} findings)...`);
 			const response = await fetch(url, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -423,6 +799,51 @@ For each selected image, return an object with:
 				const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
 				const result = JSON.parse(cleaned);
 				if (Array.isArray(result.findings)) {
+					result.findings = result.findings.map(f => preserveQuotedReference(f, sourceById.get(f.id)));
+					const normalizedFindings = result.findings.map(f => {
+						const source = sourceById.get(f.id) || {};
+						const validated = typeof f.validated === 'boolean' ? f.validated : true;
+						const mergedForConfidence = { ...source, ...f };
+						const confidence = Math.round(clamp01(
+							typeof f.confidence === 'number' ? f.confidence : inferConfidence(mergedForConfidence)
+						) * 100) / 100;
+						return {
+							...f,
+							severity: f.severity ?? source.severity,
+							validated,
+							validationReason: typeof f.validationReason === 'string'
+								? f.validationReason
+								: (validated ? 'Visually supported in screenshot.' : 'Not visually supported in screenshot.'),
+							confidence,
+						};
+					});
+					const dropReasons = { notValidated: 0, lowConfidence: 0 };
+					result.findings = normalizedFindings.filter(f => {
+						if (!f.validated) {
+							dropReasons.notValidated++;
+							return false;
+						}
+						const threshold = confidenceThresholdForFinding(f);
+						if (f.confidence < threshold) {
+							dropReasons.lowConfidence++;
+							return false;
+						}
+						return true;
+					});
+					result.gateReport = {
+						inputCount: normalizedFindings.length,
+						keptCount: result.findings.length,
+						droppedCount: normalizedFindings.length - result.findings.length,
+						dropReasons,
+						thresholds: {
+							critical: 0.55,
+							warning: 0.65,
+							info: 0.75,
+						},
+					};
+					if (result.findings.length === 0) {
+						result.summary = result.summary || 'No visually validated issues were confirmed in this screenshot.';
+					}
 					// First pass: resolve & validate images per finding
 					result.findings = result.findings.map(f => {
 						const rawImages = Array.isArray(f.bookImages) ? f.bookImages : [];
@@ -498,7 +919,12 @@ For each selected image, return an object with:
 	// Fallback: gemini-2.0-flash � older model, higher availability, no thinkingConfig
 	const fallbackBody = JSON.stringify({
 		system_instruction: { parts: [{ text: systemInstruction }] },
-		contents: [{ parts: [{ text: bodyPayload }] }],
+		contents: [{
+			parts: [
+				...(screenshotB64 ? [{ inline_data: { mime_type: 'image/png', data: screenshotB64 } }] : []),
+				{ text: bodyPayload }
+			]
+		}],
 		generationConfig: {
 			maxOutputTokens: 16384,
 			responseMimeType: 'application/json',
@@ -565,10 +991,13 @@ export async function POST({ request }) {
 				await page.evaluate(async () => {
 					const ACCEPT_TEXTS = [
 						'accept all', 'accept cookies', 'agree', 'i agree', 'allow all',
-						'allow cookies', 'got it', 'ok', 'okay', 'continue', 'close',
+						'allow cookies', 'accept', 'accept all cookies', 'allow all cookies',
+						'got it', 'ok', 'okay', 'continue', 'close', 'save preferences',
 						'zustimmen', 'alle akzeptieren', 'akzeptieren',  // German
 						'tout accepter', 'accepter', 'fermer',            // French
 						'acceptar', 'aceptar todas',                      // Spanish
+						'accetta', 'accetta tutto',                       // Italian
+						'aceitar', 'aceitar tudo',                        // Portuguese
 					];
 					const buttons = Array.from(document.querySelectorAll(
 						'button, [role="button"], a[href="#"], input[type="button"], input[type="submit"]'
@@ -583,7 +1012,7 @@ export async function POST({ request }) {
 					}
 				});
 
-				// 2. Remove remaining popups � specific known frameworks + safe heuristics only
+				// 2. Remove remaining popups — specific known frameworks + robust heuristics
 				await page.evaluate(() => {
 					const KNOWN_SELECTORS = [
 						// OneTrust
@@ -613,18 +1042,62 @@ export async function POST({ request }) {
 						});
 					}
 
+					// Hide common CMP iframes (OneTrust/Cookiebot/TrustArc/etc.)
+					document.querySelectorAll('iframe').forEach(frame => {
+						const src = (frame.getAttribute('src') || '').toLowerCase();
+						const title = (frame.getAttribute('title') || '').toLowerCase();
+						const name = (frame.getAttribute('name') || '').toLowerCase();
+						if (/cookie|consent|onetrust|cookielaw|cookiebot|trustarc|didomi|quantcast|sourcepoint|sp_message/.test(src)
+							|| /cookie|consent|gdpr|privacy|cmp|sourcepoint/.test(title)
+							|| /cookie|consent|gdpr|privacy|cmp|sp_message/.test(name)) {
+					/** @type {HTMLElement} */ (frame).style.display = 'none';
+						}
+					});
+
+					// Generic keyword selector sweep for common consent containers.
+					const KEYWORD_SELECTOR = [
+						'[id*="cookie" i]', '[class*="cookie" i]',
+						'[id*="consent" i]', '[class*="consent" i]',
+						'[id*="gdpr" i]', '[class*="gdpr" i]',
+						'[id*="privacy" i]', '[class*="privacy" i]',
+						'[data-testid*="cookie" i]', '[data-testid*="consent" i]',
+						'[aria-label*="cookie" i]', '[aria-label*="consent" i]'
+					].join(',');
+					document.querySelectorAll(KEYWORD_SELECTOR).forEach(el => {
+						const style = window.getComputedStyle(el);
+						const r = el.getBoundingClientRect();
+						const edgeLike = r.width >= window.innerWidth * 0.4 && (r.top <= window.innerHeight * 0.3 || r.bottom >= window.innerHeight * 0.7);
+						if ((style.position === 'fixed' || style.position === 'absolute' || style.position === 'sticky' || edgeLike) && r.height >= 24) {
+					/** @type {HTMLElement} */ (el).style.display = 'none';
+						}
+					});
+
 					// Heuristic: full-page backdrops and bottom cookie bars
 					const vw = window.innerWidth;
 					const vh = window.innerHeight;
-					const CONSENT_KEYWORDS = /cookie|consent|gdpr|privacy|datenschutz|accept|agree|opt.?in/i;
+					const CONSENT_KEYWORDS = /cookie|consent|gdpr|privacy|datenschutz|accept|agree|opt.?in|onetrust|cookielaw|cookiebot|didomi|trustarc|cmp/i;
 					document.querySelectorAll('*').forEach(el => {
 						const style = window.getComputedStyle(el);
-						if (style.position !== 'fixed' && style.position !== 'absolute') return;
-						if ((parseInt(style.zIndex) || 0) < 100) return;
+						if (style.position !== 'fixed' && style.position !== 'absolute' && style.position !== 'sticky') return;
+						if ((parseInt(style.zIndex) || 0) < 10) return;
 						const r = el.getBoundingClientRect();
 						const isFullCoverage = r.width >= vw * 0.85 && r.height >= vh * 0.85;
 						const isBottomCookieBar = r.width >= vw * 0.85 && r.height <= 280
 							&& r.bottom >= vh * 0.75 && style.position === 'fixed';
+						const isTopCookieBar = r.width >= vw * 0.7 && r.height >= 40 && r.height <= vh * 0.6
+							&& r.top <= vh * 0.25;
+						const isConsentLikeBar = r.width >= vw * 0.5 && r.height >= 40 && r.height <= vh * 0.6
+							&& (r.top <= vh * 0.25 || r.bottom >= vh * 0.75);
+
+						const attrBlob = [
+							(el.id || ''),
+							(el.className || ''),
+							(el.getAttribute('role') || ''),
+							(el.getAttribute('aria-label') || ''),
+							(el.getAttribute('data-testid') || ''),
+							(el.getAttribute('data-cy') || ''),
+							(el.getAttribute('data-name') || ''),
+						].join(' ').toLowerCase();
 
 						if (isFullCoverage) {
 							// Only remove if it looks like a consent/GDPR backdrop:
@@ -636,15 +1109,84 @@ export async function POST({ request }) {
 							const isSemiTransparent = alpha < 0.85;
 							const text = /** @type {HTMLElement} */ (el).innerText || '';
 							const hasConsentText = CONSENT_KEYWORDS.test(text);
-							if (isSemiTransparent || hasConsentText) {
+							const hasConsentAttrs = CONSENT_KEYWORDS.test(attrBlob);
+							if (isSemiTransparent || hasConsentText || hasConsentAttrs) {
 						/** @type {HTMLElement} */ (el).style.display = 'none';
 							}
-						} else if (isBottomCookieBar) {
+						} else {
+							const text = /** @type {HTMLElement} */ (el).innerText || '';
+							const hasConsentText = CONSENT_KEYWORDS.test(text);
+							const hasConsentAttrs = CONSENT_KEYWORDS.test(attrBlob);
+							if ((isBottomCookieBar || isTopCookieBar || isConsentLikeBar) && (hasConsentText || hasConsentAttrs)) {
 					/** @type {HTMLElement} */ (el).style.display = 'none';
+							}
 						}
 					});
 
 					// Re-enable body scroll that popups often lock
+					document.body.style.overflow = '';
+					document.documentElement.style.overflow = '';
+				});
+
+				// Some CMPs inject late; run a second pass after a short delay.
+				await new Promise(r => setTimeout(r, 450));
+				await page.evaluate(() => {
+					const CONSENT_KEYWORDS = /cookie|consent|gdpr|privacy|datenschutz|onetrust|cookiebot|didomi|trustarc|cmp/i;
+					const vw = window.innerWidth;
+					const vh = window.innerHeight;
+					document.querySelectorAll('*').forEach(el => {
+						const style = window.getComputedStyle(el);
+						if (style.position !== 'fixed' && style.position !== 'absolute' && style.position !== 'sticky') return;
+						const r = el.getBoundingClientRect();
+						if (r.width < vw * 0.5 || r.height < 40 || r.height > vh * 0.7) return;
+						const edgeBar = r.top <= vh * 0.25 || r.bottom >= vh * 0.75;
+						if (!edgeBar) return;
+						const attrBlob = `${el.id || ''} ${el.className || ''} ${(el.getAttribute('aria-label') || '')}`.toLowerCase();
+						const text = /** @type {HTMLElement} */ (el).innerText || '';
+						if (CONSENT_KEYWORDS.test(attrBlob) || CONSENT_KEYWORDS.test(text)) {
+					/** @type {HTMLElement} */ (el).style.display = 'none';
+						}
+					});
+					document.body.style.overflow = '';
+					document.documentElement.style.overflow = '';
+				});
+
+				// Third pass for very late CMP injection (1.5s after initial load).
+				await new Promise(r => setTimeout(r, 1500));
+				await page.evaluate(() => {
+					const CONSENT_KEYWORDS = /cookie|consent|gdpr|privacy|datenschutz|onetrust|cookiebot|didomi|trustarc|cmp|sourcepoint|sp_message/i;
+					const vw = window.innerWidth;
+					const vh = window.innerHeight;
+
+					// Click accept buttons again in case the CMP appeared late.
+					const lateButtons = Array.from(document.querySelectorAll('button, [role="button"], a[href="#"], input[type="button"], input[type="submit"]'));
+					for (const btn of lateButtons) {
+						const txt = ((btn.textContent || '').trim().toLowerCase());
+						if (/accept|agree|allow|akzept|zustimm|acept|accepter|accetta|aceitar/.test(txt)) {
+					/** @type {HTMLElement} */ (btn).click();
+						}
+					}
+
+					document.querySelectorAll('*').forEach(el => {
+						const style = window.getComputedStyle(el);
+						if (style.position !== 'fixed' && style.position !== 'absolute' && style.position !== 'sticky') return;
+						const r = el.getBoundingClientRect();
+						if (r.width < vw * 0.35 || r.height < 24 || r.height > vh * 0.9) return;
+						const edgeBar = r.top <= vh * 0.3 || r.bottom >= vh * 0.7;
+						const txt = /** @type {HTMLElement} */ (el).innerText || '';
+						const attrs = `${el.id || ''} ${el.className || ''} ${(el.getAttribute('aria-label') || '')} ${(el.getAttribute('data-testid') || '')}`.toLowerCase();
+						if (edgeBar && (CONSENT_KEYWORDS.test(txt) || CONSENT_KEYWORDS.test(attrs))) {
+					/** @type {HTMLElement} */ (el).style.display = 'none';
+						}
+					});
+
+					document.querySelectorAll('iframe').forEach(frame => {
+						const blob = `${frame.getAttribute('src') || ''} ${frame.getAttribute('title') || ''} ${frame.getAttribute('name') || ''}`.toLowerCase();
+						if (CONSENT_KEYWORDS.test(blob)) {
+					/** @type {HTMLElement} */ (frame).style.display = 'none';
+						}
+					});
+
 					document.body.style.overflow = '';
 					document.documentElement.style.overflow = '';
 				});
@@ -706,6 +1248,24 @@ export async function POST({ request }) {
 						const vH = window.innerHeight;
 						const TEXT_TAGS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span', 'a', 'li', 'label', 'button', 'td', 'th', 'caption']);
 						const INTERACTIVE_TAGS = new Set(['a', 'button', 'input', 'select', 'textarea']);
+						const TEXT_SELECTOR = 'p, h1, h2, h3, h4, h5, h6, span, a, li, label, button, td, th, caption';
+						function getRepresentativeTextSource(el) {
+							const ownText = ((el instanceof HTMLElement ? el.innerText : el.textContent) || '').trim().replace(/\s+/g, ' ').slice(0, 300);
+							const descendants = Array.from(el.querySelectorAll(TEXT_SELECTOR));
+							for (const child of descendants) {
+								if (child === el) continue;
+								const childRect = child.getBoundingClientRect();
+								if (childRect.width < 2 || childRect.height < 2) continue;
+								if (childRect.bottom < 0 || childRect.top > vH || childRect.right < 0 || childRect.left > vW) continue;
+								const childStyle = window.getComputedStyle(child);
+								if (childStyle.display === 'none' || childStyle.visibility === 'hidden' || childStyle.visibility === 'collapse') continue;
+								if ((parseFloat(childStyle.opacity) || 0) <= 0) continue;
+								const childText = ((child instanceof HTMLElement ? child.innerText : child.textContent) || '').trim().replace(/\s+/g, ' ').slice(0, 300);
+								if (!childText) continue;
+								return { node: child, text: childText };
+							}
+							return ownText ? { node: el, text: ownText } : null;
+						}
 						/** @type {any[]} */
 						const results = [];
 						for (const el of all) {
@@ -713,21 +1273,31 @@ export async function POST({ request }) {
 							if (r.width < 2 || r.height < 2) continue;
 							if (r.bottom < 0 || r.top > vH || r.right < 0 || r.left > vW) continue;
 							const cs = window.getComputedStyle(el);
+							// Ignore elements users cannot see or interact with. This prevents
+							// hidden nav mega-menu items from inflating touch-target counts.
+							if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse') continue;
+							if ((parseFloat(cs.opacity) || 0) <= 0) continue;
+							if (cs.pointerEvents === 'none') continue;
 							const tag = el.tagName.toLowerCase();
+							const isTextTag = TEXT_TAGS.has(tag);
+							const isInteractiveTag = INTERACTIVE_TAGS.has(tag);
+							const textSource = (isTextTag || isInteractiveTag) ? getRepresentativeTextSource(el) : null;
+							const usesChildTextSource = !!textSource && textSource.node !== el;
+							const textStyle = textSource ? window.getComputedStyle(textSource.node) : cs;
 							results.push({
 								tag,
 								rect: { x: Math.round(Math.max(r.left, 0)), y: Math.round(Math.max(r.top, 0)), w: Math.round(Math.min(r.right, vW) - Math.max(r.left, 0)), h: Math.round(Math.min(r.bottom, vH) - Math.max(r.top, 0)) },
-								color: parseColor(cs.color),
+								color: parseColor(textStyle.color),
 								bg: getEffectiveBg(el),
-								fontSize: parseFloat(cs.fontSize) || 14,
-								fontWeight: parseInt(cs.fontWeight) || 400,
-								lineHeight: parseFloat(cs.lineHeight) || 0,
-								fontFamily: (cs.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase(),
-								textAlign: cs.textAlign || 'left',
-								textDecoration: (cs.textDecorationLine && cs.textDecorationLine !== 'none')
-									? cs.textDecorationLine
-									: ((cs.textDecoration || '').includes('underline') ? 'underline' : 'none'),
-								letterSpacing: parseFloat(cs.letterSpacing) || 0,
+								fontSize: parseFloat(textStyle.fontSize) || 14,
+								fontWeight: parseInt(textStyle.fontWeight) || 400,
+								lineHeight: parseFloat(textStyle.lineHeight) || 0,
+								fontFamily: (textStyle.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase(),
+								textAlign: textStyle.textAlign || 'left',
+								textDecoration: (textStyle.textDecorationLine && textStyle.textDecorationLine !== 'none')
+									? textStyle.textDecorationLine
+									: ((textStyle.textDecoration || '').includes('underline') ? 'underline' : 'none'),
+								letterSpacing: parseFloat(textStyle.letterSpacing) || 0,
 								paddingTop: parseFloat(cs.paddingTop) || 0,
 								paddingBottom: parseFloat(cs.paddingBottom) || 0,
 								paddingLeft: parseFloat(cs.paddingLeft) || 0,
@@ -741,13 +1311,13 @@ export async function POST({ request }) {
 									parseFloat(cs.borderBottomWidth) || 0,
 									parseFloat(cs.borderLeftWidth) || 0
 								),
-								textTransform: cs.textTransform || 'none',
+								textTransform: textStyle.textTransform || 'none',
 								hasBackgroundImage: !!cs.backgroundImage && cs.backgroundImage !== 'none' && cs.backgroundImage.includes('url('),
 								opacity: parseFloat(cs.opacity) || 1,
-								isText: TEXT_TAGS.has(tag),
-								isInteractive: INTERACTIVE_TAGS.has(tag),
-								textContent: (TEXT_TAGS.has(tag) || INTERACTIVE_TAGS.has(tag))
-									? (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80)
+								isText: isTextTag && !!textSource?.text && !usesChildTextSource,
+								isInteractive: isInteractiveTag,
+								textContent: (isTextTag || isInteractiveTag)
+									? (textSource?.text || '')
 									: '',
 								alt: tag === 'img' ? (el.getAttribute('alt') || '').trim() : '',
 								fill: (() => { const f = cs.fill; return (f && f !== 'none' && f !== '') ? parseColor(f) : null; })(),
@@ -759,27 +1329,13 @@ export async function POST({ request }) {
 					const analysis = analyseAlgorithmically(elements, vpW, vpH);
 					_perf('algorithmic analysis done (algo mode)');
 
-					// Merge all analysis findings and strengths
-					const allFindings = [
-						...analysis.findings,
-						...cssAnalysis.findings,
-						...htmlAnalysis.findings,
-						...jsAnalysis.findings,
-					];
-					const allStrengths = [
-						...analysis.strengths,
-						...cssAnalysis.strengths,
-						...htmlAnalysis.strengths,
-						...jsAnalysis.strengths,
-					];
-
 					send({ type: 'step', step: 7 });
 					send({
 						type: 'done', result: {
 							screenshot: screenshotDataUrl,
 							...analysis,
-							findings: allFindings,
-							strengths: allStrengths,
+							findings: analysis.findings,
+							strengths: analysis.strengths,
 						}
 					});
 				} else if (mode === 'algo-ai') {
@@ -818,6 +1374,24 @@ export async function POST({ request }) {
 						const vH = window.innerHeight;
 						const TEXT_TAGS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span', 'a', 'li', 'label', 'button', 'td', 'th', 'caption']);
 						const INTERACTIVE_TAGS = new Set(['a', 'button', 'input', 'select', 'textarea']);
+						const TEXT_SELECTOR = 'p, h1, h2, h3, h4, h5, h6, span, a, li, label, button, td, th, caption';
+						function getRepresentativeTextSource(el) {
+							const ownText = ((el instanceof HTMLElement ? el.innerText : el.textContent) || '').trim().replace(/\s+/g, ' ').slice(0, 300);
+							const descendants = Array.from(el.querySelectorAll(TEXT_SELECTOR));
+							for (const child of descendants) {
+								if (child === el) continue;
+								const childRect = child.getBoundingClientRect();
+								if (childRect.width < 2 || childRect.height < 2) continue;
+								if (childRect.bottom < 0 || childRect.top > vH || childRect.right < 0 || childRect.left > vW) continue;
+								const childStyle = window.getComputedStyle(child);
+								if (childStyle.display === 'none' || childStyle.visibility === 'hidden' || childStyle.visibility === 'collapse') continue;
+								if ((parseFloat(childStyle.opacity) || 0) <= 0) continue;
+								const childText = ((child instanceof HTMLElement ? child.innerText : child.textContent) || '').trim().replace(/\s+/g, ' ').slice(0, 300);
+								if (!childText) continue;
+								return { node: child, text: childText };
+							}
+							return ownText ? { node: el, text: ownText } : null;
+						}
 						/** @type {any[]} */
 						const results = [];
 						for (const el of all) {
@@ -825,21 +1399,31 @@ export async function POST({ request }) {
 							if (r.width < 2 || r.height < 2) continue;
 							if (r.bottom < 0 || r.top > vH || r.right < 0 || r.left > vW) continue;
 							const cs = window.getComputedStyle(el);
+							// Ignore elements users cannot see or interact with. This prevents
+							// hidden nav mega-menu items from inflating touch-target counts.
+							if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse') continue;
+							if ((parseFloat(cs.opacity) || 0) <= 0) continue;
+							if (cs.pointerEvents === 'none') continue;
 							const tag = el.tagName.toLowerCase();
+							const isTextTag = TEXT_TAGS.has(tag);
+							const isInteractiveTag = INTERACTIVE_TAGS.has(tag);
+							const textSource = (isTextTag || isInteractiveTag) ? getRepresentativeTextSource(el) : null;
+							const usesChildTextSource = !!textSource && textSource.node !== el;
+							const textStyle = textSource ? window.getComputedStyle(textSource.node) : cs;
 							results.push({
 								tag,
 								rect: { x: Math.round(Math.max(r.left, 0)), y: Math.round(Math.max(r.top, 0)), w: Math.round(Math.min(r.right, vW) - Math.max(r.left, 0)), h: Math.round(Math.min(r.bottom, vH) - Math.max(r.top, 0)) },
-								color: parseColor(cs.color),
+								color: parseColor(textStyle.color),
 								bg: getEffectiveBg(el),
-								fontSize: parseFloat(cs.fontSize) || 14,
-								fontWeight: parseInt(cs.fontWeight) || 400,
-								lineHeight: parseFloat(cs.lineHeight) || 0,
-								fontFamily: (cs.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase(),
-								textAlign: cs.textAlign || 'left',
-								textDecoration: (cs.textDecorationLine && cs.textDecorationLine !== 'none')
-									? cs.textDecorationLine
-									: ((cs.textDecoration || '').includes('underline') ? 'underline' : 'none'),
-								letterSpacing: parseFloat(cs.letterSpacing) || 0,
+								fontSize: parseFloat(textStyle.fontSize) || 14,
+								fontWeight: parseInt(textStyle.fontWeight) || 400,
+								lineHeight: parseFloat(textStyle.lineHeight) || 0,
+								fontFamily: (textStyle.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase(),
+								textAlign: textStyle.textAlign || 'left',
+								textDecoration: (textStyle.textDecorationLine && textStyle.textDecorationLine !== 'none')
+									? textStyle.textDecorationLine
+									: ((textStyle.textDecoration || '').includes('underline') ? 'underline' : 'none'),
+								letterSpacing: parseFloat(textStyle.letterSpacing) || 0,
 								paddingTop: parseFloat(cs.paddingTop) || 0,
 								paddingBottom: parseFloat(cs.paddingBottom) || 0,
 								paddingLeft: parseFloat(cs.paddingLeft) || 0,
@@ -853,13 +1437,13 @@ export async function POST({ request }) {
 									parseFloat(cs.borderBottomWidth) || 0,
 									parseFloat(cs.borderLeftWidth) || 0
 								),
-								textTransform: cs.textTransform || 'none',
+								textTransform: textStyle.textTransform || 'none',
 								hasBackgroundImage: !!cs.backgroundImage && cs.backgroundImage !== 'none' && cs.backgroundImage.includes('url('),
 								opacity: parseFloat(cs.opacity) || 1,
-								isText: TEXT_TAGS.has(tag),
-								isInteractive: INTERACTIVE_TAGS.has(tag),
-								textContent: (TEXT_TAGS.has(tag) || INTERACTIVE_TAGS.has(tag))
-									? (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80)
+								isText: isTextTag && !!textSource?.text && !usesChildTextSource,
+								isInteractive: isInteractiveTag,
+								textContent: (isTextTag || isInteractiveTag)
+									? (textSource?.text || '')
 									: '',
 								alt: tag === 'img' ? (el.getAttribute('alt') || '').trim() : '',
 								fill: (() => { const f = cs.fill; return (f && f !== 'none' && f !== '') ? parseColor(f) : null; })(),
@@ -871,22 +1455,19 @@ export async function POST({ request }) {
 					const algoAnalysis = analyseAlgorithmically(elements, vpW, vpH);
 					_perf('algorithmic analysis done (algo-ai mode)');
 					send({ type: 'step', step: 4 });
+					const baseFindings = filterFindingsToActiveScope([
+						...algoAnalysis.findings,
+					]);
 					let aiRewrite = null;
 					try {
-						// Merge algorithmic findings with CSS/HTML/JS findings before AI rewrite
-						const mergedFindings = [
-							...algoAnalysis.findings,
-							...cssAnalysis.findings,
-							...htmlAnalysis.findings,
-							...jsAnalysis.findings,
-						];
+						// Screenshot-only mode: rewrite only viewport-derived algorithmic findings.
 						const codeContext = {
 							css: cssAnalysis.cssData,
 							html: htmlAnalysis.htmlData,
 							js: jsAnalysis.jsData,
 						};
 						_perf('calling Gemini (algo-ai rewrite)...');
-						aiRewrite = await callGeminiWithFindings(apiKey, mergedFindings, algoAnalysis.overallScore, codeContext);
+						aiRewrite = await callGeminiWithFindings(apiKey, baseFindings, algoAnalysis.overallScore, codeContext, screenshotB64);
 						_perf('Gemini algo-ai rewrite done');
 					} catch (aiErr) {
 						console.warn('[Percepta] Gemini unavailable, falling back to algorithmic results:', aiErr.message);
@@ -895,10 +1476,22 @@ export async function POST({ request }) {
 					send({ type: 'step', step: 6 });
 					const allStrengths = [
 						...(aiRewrite?.strengths ?? algoAnalysis.strengths),
-						...cssAnalysis.strengths,
-						...htmlAnalysis.strengths,
-						...jsAnalysis.strengths,
 					];
+					let rescuedHighSeverity = [];
+					const displayedFindings = aiRewrite?.findings
+						? (() => {
+							const aiFindings = filterFindingsToActiveScope(aiRewrite.findings);
+							const aiIds = new Set(aiFindings.map(f => f.id));
+							rescuedHighSeverity = baseFindings.filter(f =>
+								!aiIds.has(f.id) && (f.severity === 'critical' || f.severity === 'warning')
+							);
+							return filterFindingsToActiveScope([
+								...aiFindings,
+								...rescuedHighSeverity,
+							]);
+						})()
+						: baseFindings;
+					const displayedScore = computeOverallScoreFromFindings(displayedFindings);
 
 					const noImages = aiRewrite !== null &&
 						aiRewrite.findings.every(f => (f.bookImages ?? []).length === 0);
@@ -906,17 +1499,14 @@ export async function POST({ request }) {
 					send({
 						type: 'done', result: {
 							screenshot: screenshotDataUrl,
-							overallScore: algoAnalysis.overallScore,
+							overallScore: displayedScore,
 							summary: aiRewrite?.summary ?? algoAnalysis.summary,
-							findings: aiRewrite?.findings ?? [
-								...algoAnalysis.findings,
-								...cssAnalysis.findings,
-								...htmlAnalysis.findings,
-								...jsAnalysis.findings,
-							],
+							findings: displayedFindings,
 							strengths: allStrengths,
 							expertNote: algoAnalysis.expertNote,
 							aiUnavailable: aiRewrite === null,
+							aiGateReport: aiRewrite?.gateReport ?? null,
+							rescuedHighSeverityCount: rescuedHighSeverity.length,
 							noImages,
 						}
 					});
@@ -948,6 +1538,24 @@ export async function POST({ request }) {
 						const vH = window.innerHeight;
 						const TEXT_TAGS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span', 'a', 'li', 'label', 'button', 'td', 'th', 'caption']);
 						const INTERACTIVE_TAGS = new Set(['a', 'button', 'input', 'select', 'textarea']);
+						const TEXT_SELECTOR = 'p, h1, h2, h3, h4, h5, h6, span, a, li, label, button, td, th, caption';
+						function getRepresentativeTextSource(el) {
+							const ownText = ((el instanceof HTMLElement ? el.innerText : el.textContent) || '').trim().replace(/\s+/g, ' ').slice(0, 300);
+							const descendants = Array.from(el.querySelectorAll(TEXT_SELECTOR));
+							for (const child of descendants) {
+								if (child === el) continue;
+								const childRect = child.getBoundingClientRect();
+								if (childRect.width < 2 || childRect.height < 2) continue;
+								if (childRect.bottom < 0 || childRect.top > vH || childRect.right < 0 || childRect.left > vW) continue;
+								const childStyle = window.getComputedStyle(child);
+								if (childStyle.display === 'none' || childStyle.visibility === 'hidden' || childStyle.visibility === 'collapse') continue;
+								if ((parseFloat(childStyle.opacity) || 0) <= 0) continue;
+								const childText = ((child instanceof HTMLElement ? child.innerText : child.textContent) || '').trim().replace(/\s+/g, ' ').slice(0, 300);
+								if (!childText) continue;
+								return { node: child, text: childText };
+							}
+							return ownText ? { node: el, text: ownText } : null;
+						}
 						/** @type {any[]} */
 						const results = [];
 						for (const el of all) {
@@ -955,21 +1563,31 @@ export async function POST({ request }) {
 							if (r.width < 2 || r.height < 2) continue;
 							if (r.bottom < 0 || r.top > vH || r.right < 0 || r.left > vW) continue;
 							const cs = window.getComputedStyle(el);
+							// Ignore elements users cannot see or interact with. This prevents
+							// hidden nav mega-menu items from inflating touch-target counts.
+							if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse') continue;
+							if ((parseFloat(cs.opacity) || 0) <= 0) continue;
+							if (cs.pointerEvents === 'none') continue;
 							const tag = el.tagName.toLowerCase();
+							const isTextTag = TEXT_TAGS.has(tag);
+							const isInteractiveTag = INTERACTIVE_TAGS.has(tag);
+							const textSource = (isTextTag || isInteractiveTag) ? getRepresentativeTextSource(el) : null;
+							const usesChildTextSource = !!textSource && textSource.node !== el;
+							const textStyle = textSource ? window.getComputedStyle(textSource.node) : cs;
 							results.push({
 								tag,
 								rect: { x: Math.round(Math.max(r.left, 0)), y: Math.round(Math.max(r.top, 0)), w: Math.round(Math.min(r.right, vW) - Math.max(r.left, 0)), h: Math.round(Math.min(r.bottom, vH) - Math.max(r.top, 0)) },
-								color: parseColor(cs.color),
+								color: parseColor(textStyle.color),
 								bg: getEffectiveBg(el),
-								fontSize: parseFloat(cs.fontSize) || 14,
-								fontWeight: parseInt(cs.fontWeight) || 400,
-								lineHeight: parseFloat(cs.lineHeight) || 0,
-								fontFamily: (cs.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase(),
-								textAlign: cs.textAlign || 'left',
-								textDecoration: (cs.textDecorationLine && cs.textDecorationLine !== 'none')
-									? cs.textDecorationLine
-									: ((cs.textDecoration || '').includes('underline') ? 'underline' : 'none'),
-								letterSpacing: parseFloat(cs.letterSpacing) || 0,
+								fontSize: parseFloat(textStyle.fontSize) || 14,
+								fontWeight: parseInt(textStyle.fontWeight) || 400,
+								lineHeight: parseFloat(textStyle.lineHeight) || 0,
+								fontFamily: (textStyle.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase(),
+								textAlign: textStyle.textAlign || 'left',
+								textDecoration: (textStyle.textDecorationLine && textStyle.textDecorationLine !== 'none')
+									? textStyle.textDecorationLine
+									: ((textStyle.textDecoration || '').includes('underline') ? 'underline' : 'none'),
+								letterSpacing: parseFloat(textStyle.letterSpacing) || 0,
 								paddingTop: parseFloat(cs.paddingTop) || 0,
 								paddingBottom: parseFloat(cs.paddingBottom) || 0,
 								paddingLeft: parseFloat(cs.paddingLeft) || 0,
@@ -983,13 +1601,13 @@ export async function POST({ request }) {
 									parseFloat(cs.borderBottomWidth) || 0,
 									parseFloat(cs.borderLeftWidth) || 0
 								),
-								textTransform: cs.textTransform || 'none',
+								textTransform: textStyle.textTransform || 'none',
 								hasBackgroundImage: !!cs.backgroundImage && cs.backgroundImage !== 'none' && cs.backgroundImage.includes('url('),
 								opacity: parseFloat(cs.opacity) || 1,
-								isText: TEXT_TAGS.has(tag),
-								isInteractive: INTERACTIVE_TAGS.has(tag),
-								textContent: (TEXT_TAGS.has(tag) || INTERACTIVE_TAGS.has(tag))
-									? (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80)
+								isText: isTextTag && !!textSource?.text && !usesChildTextSource,
+								isInteractive: isInteractiveTag,
+								textContent: (isTextTag || isInteractiveTag)
+									? (textSource?.text || '')
 									: '',
 								alt: tag === 'img' ? (el.getAttribute('alt') || '').trim() : '',
 								fill: (() => { const f = cs.fill; return (f && f !== 'none' && f !== '') ? parseColor(f) : null; })(),
@@ -1003,40 +1621,31 @@ export async function POST({ request }) {
 					send({ type: 'step', step: 4 });
 					let aiRewrite = null;
 					try {
-						// Merge algorithmic findings with CSS/HTML/JS findings before AI rewrite
-						const mergedFindings = [
+						// Screenshot-only mode: rewrite only viewport-derived algorithmic findings.
+						const mergedFindings = filterFindingsToActiveScope([
 							...algoResult.findings,
-							...cssAnalysis.findings,
-							...htmlAnalysis.findings,
-							...jsAnalysis.findings,
-						];
+						]);
 						const codeContext = {
 							css: cssAnalysis.cssData,
 							html: htmlAnalysis.htmlData,
 							js: jsAnalysis.jsData,
 						};
 						_perf('calling Gemini (compare-algo-ai rewrite)...');
-						aiRewrite = await callGeminiWithFindings(apiKey, mergedFindings, algoResult.overallScore, codeContext);
+						aiRewrite = await callGeminiWithFindings(apiKey, mergedFindings, algoResult.overallScore, codeContext, screenshotB64);
 						_perf('Gemini compare-algo-ai rewrite done');
 					} catch (aiErr) {
 						console.warn('[Percepta] Gemini unavailable, falling back to algorithmic results:', aiErr.message);
 					}
 
 					send({ type: 'step', step: 6 });
-					// Merge algo findings with CSS/HTML/JS findings for the "algo" side
+					// Screenshot-only mode: keep only viewport-derived algorithmic findings.
 					const algoWithExtensions = {
 						...algoResult,
-						findings: [
+						findings: filterFindingsToActiveScope([
 							...algoResult.findings,
-							...cssAnalysis.findings,
-							...htmlAnalysis.findings,
-							...jsAnalysis.findings,
-						],
+						]),
 						strengths: [
 							...algoResult.strengths,
-							...cssAnalysis.strengths,
-							...htmlAnalysis.strengths,
-							...jsAnalysis.strengths,
 						],
 					};
 
@@ -1051,7 +1660,7 @@ export async function POST({ request }) {
 							algo: algoWithExtensions,
 							algoAi: {
 								summary: aiRewrite?.summary ?? algoResult.summary,
-								findings: aiRewrite?.findings ?? algoWithExtensions.findings,
+								findings: aiRewrite?.findings ? filterFindingsToActiveScope(aiRewrite.findings) : algoWithExtensions.findings,
 								strengths: aiRewrite?.strengths ?? algoWithExtensions.strengths,
 							},
 							aiUnavailable: aiRewrite === null,
@@ -1073,18 +1682,11 @@ export async function POST({ request }) {
 						type: 'done', result: {
 							screenshot: screenshotDataUrl,
 							...result,
-							// Add CSS/HTML/JS findings to AI results
-							findings: [
+							findings: filterFindingsToActiveScope([
 								...(result.findings || []),
-								...cssAnalysis.findings,
-								...htmlAnalysis.findings,
-								...jsAnalysis.findings,
-							],
+							]),
 							strengths: [
 								...(result.strengths || []),
-								...cssAnalysis.strengths,
-								...htmlAnalysis.strengths,
-								...jsAnalysis.strengths,
 							],
 						}
 					});
@@ -1124,6 +1726,24 @@ export async function POST({ request }) {
 						const vH = window.innerHeight;
 						const TEXT_TAGS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span', 'a', 'li', 'label', 'button', 'td', 'th', 'caption']);
 						const INTERACTIVE_TAGS = new Set(['a', 'button', 'input', 'select', 'textarea']);
+						const TEXT_SELECTOR = 'p, h1, h2, h3, h4, h5, h6, span, a, li, label, button, td, th, caption';
+						function getRepresentativeTextSource(el) {
+							const ownText = ((el instanceof HTMLElement ? el.innerText : el.textContent) || '').trim().replace(/\s+/g, ' ').slice(0, 300);
+							const descendants = Array.from(el.querySelectorAll(TEXT_SELECTOR));
+							for (const child of descendants) {
+								if (child === el) continue;
+								const childRect = child.getBoundingClientRect();
+								if (childRect.width < 2 || childRect.height < 2) continue;
+								if (childRect.bottom < 0 || childRect.top > vH || childRect.right < 0 || childRect.left > vW) continue;
+								const childStyle = window.getComputedStyle(child);
+								if (childStyle.display === 'none' || childStyle.visibility === 'hidden' || childStyle.visibility === 'collapse') continue;
+								if ((parseFloat(childStyle.opacity) || 0) <= 0) continue;
+								const childText = ((child instanceof HTMLElement ? child.innerText : child.textContent) || '').trim().replace(/\s+/g, ' ').slice(0, 300);
+								if (!childText) continue;
+								return { node: child, text: childText };
+							}
+							return ownText ? { node: el, text: ownText } : null;
+						}
 						/** @type {any[]} */
 						const results = [];
 						for (const el of all) {
@@ -1131,21 +1751,31 @@ export async function POST({ request }) {
 							if (r.width < 2 || r.height < 2) continue;
 							if (r.bottom < 0 || r.top > vH || r.right < 0 || r.left > vW) continue;
 							const cs = window.getComputedStyle(el);
+							// Ignore elements users cannot see or interact with. This prevents
+							// hidden nav mega-menu items from inflating touch-target counts.
+							if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse') continue;
+							if ((parseFloat(cs.opacity) || 0) <= 0) continue;
+							if (cs.pointerEvents === 'none') continue;
 							const tag = el.tagName.toLowerCase();
+							const isTextTag = TEXT_TAGS.has(tag);
+							const isInteractiveTag = INTERACTIVE_TAGS.has(tag);
+							const textSource = (isTextTag || isInteractiveTag) ? getRepresentativeTextSource(el) : null;
+							const usesChildTextSource = !!textSource && textSource.node !== el;
+							const textStyle = textSource ? window.getComputedStyle(textSource.node) : cs;
 							results.push({
 								tag,
 								rect: { x: Math.round(Math.max(r.left, 0)), y: Math.round(Math.max(r.top, 0)), w: Math.round(Math.min(r.right, vW) - Math.max(r.left, 0)), h: Math.round(Math.min(r.bottom, vH) - Math.max(r.top, 0)) },
-								color: parseColor(cs.color),
+								color: parseColor(textStyle.color),
 								bg: getEffectiveBg(el),
-								fontSize: parseFloat(cs.fontSize) || 14,
-								fontWeight: parseInt(cs.fontWeight) || 400,
-								lineHeight: parseFloat(cs.lineHeight) || 0,
-								fontFamily: (cs.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase(),
-								textAlign: cs.textAlign || 'left',
-								textDecoration: (cs.textDecorationLine && cs.textDecorationLine !== 'none')
-									? cs.textDecorationLine
-									: ((cs.textDecoration || '').includes('underline') ? 'underline' : 'none'),
-								letterSpacing: parseFloat(cs.letterSpacing) || 0,
+								fontSize: parseFloat(textStyle.fontSize) || 14,
+								fontWeight: parseInt(textStyle.fontWeight) || 400,
+								lineHeight: parseFloat(textStyle.lineHeight) || 0,
+								fontFamily: (textStyle.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase(),
+								textAlign: textStyle.textAlign || 'left',
+								textDecoration: (textStyle.textDecorationLine && textStyle.textDecorationLine !== 'none')
+									? textStyle.textDecorationLine
+									: ((textStyle.textDecoration || '').includes('underline') ? 'underline' : 'none'),
+								letterSpacing: parseFloat(textStyle.letterSpacing) || 0,
 								paddingTop: parseFloat(cs.paddingTop) || 0,
 								paddingBottom: parseFloat(cs.paddingBottom) || 0,
 								paddingLeft: parseFloat(cs.paddingLeft) || 0,
@@ -1159,13 +1789,13 @@ export async function POST({ request }) {
 									parseFloat(cs.borderBottomWidth) || 0,
 									parseFloat(cs.borderLeftWidth) || 0
 								),
-								textTransform: cs.textTransform || 'none',
+								textTransform: textStyle.textTransform || 'none',
 								hasBackgroundImage: !!cs.backgroundImage && cs.backgroundImage !== 'none' && cs.backgroundImage.includes('url('),
 								opacity: parseFloat(cs.opacity) || 1,
-								isText: TEXT_TAGS.has(tag),
-								isInteractive: INTERACTIVE_TAGS.has(tag),
-								textContent: (TEXT_TAGS.has(tag) || INTERACTIVE_TAGS.has(tag))
-									? (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80)
+								isText: isTextTag && !!textSource?.text && !usesChildTextSource,
+								isInteractive: isInteractiveTag,
+								textContent: (isTextTag || isInteractiveTag)
+									? (textSource?.text || '')
 									: '',
 								alt: tag === 'img' ? (el.getAttribute('alt') || '').trim() : '',
 								fill: (() => { const f = cs.fill; return (f && f !== 'none' && f !== '') ? parseColor(f) : null; })(),
@@ -1187,37 +1817,24 @@ export async function POST({ request }) {
 					_perf('Gemini compare AI analysis done');
 					send({ type: 'step', step: 6 });
 
-					// Merge algo findings with CSS/HTML/JS findings
+					// Screenshot-only mode: keep findings scoped to the analysed viewport.
 					const algoWithExtensions = {
 						...algoResult,
-						findings: [
+						findings: filterFindingsToActiveScope([
 							...algoResult.findings,
-							...cssAnalysis.findings,
-							...htmlAnalysis.findings,
-							...jsAnalysis.findings,
-						],
+						]),
 						strengths: [
 							...algoResult.strengths,
-							...cssAnalysis.strengths,
-							...htmlAnalysis.strengths,
-							...jsAnalysis.strengths,
 						],
 					};
 
-					// Merge AI findings with CSS/HTML/JS findings
 					const aiWithExtensions = {
 						...aiResult,
-						findings: [
+						findings: filterFindingsToActiveScope([
 							...(aiResult.findings || []),
-							...cssAnalysis.findings,
-							...htmlAnalysis.findings,
-							...jsAnalysis.findings,
-						],
+						]),
 						strengths: [
 							...(aiResult.strengths || []),
-							...cssAnalysis.strengths,
-							...htmlAnalysis.strengths,
-							...jsAnalysis.strengths,
 						],
 					};
 
