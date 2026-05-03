@@ -156,17 +156,59 @@ function analyzeCSS(cssData) {
 	const findings = [];
 	const strengths = [];
 
+	const normalizeColor = (input) => {
+		if (!input || typeof input !== 'string') return null;
+		const color = input.trim().toLowerCase();
+
+		const hex = color.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+		if (hex) {
+			let h = hex[1];
+			if (h.length === 3) h = h.split('').map(ch => ch + ch).join('');
+			const r = parseInt(h.slice(0, 2), 16);
+			const g = parseInt(h.slice(2, 4), 16);
+			const b = parseInt(h.slice(4, 6), 16);
+			return `${r},${g},${b}`;
+		}
+
+		const rgb = color.match(/^rgba?\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+		if (rgb) {
+			return `${Math.min(255, +rgb[1])},${Math.min(255, +rgb[2])},${Math.min(255, +rgb[3])}`;
+		}
+
+		const hsl = color.match(/^hsla?\(([-\d.]+)\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%/);
+		if (hsl) {
+			const h = ((+hsl[1] % 360) + 360) % 360;
+			const s = Math.max(0, Math.min(1, +hsl[2] / 100));
+			const l = Math.max(0, Math.min(1, +hsl[3] / 100));
+			const c = (1 - Math.abs(2 * l - 1)) * s;
+			const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+			const m = l - c / 2;
+			let r = 0, g = 0, b = 0;
+			if (h < 60) [r, g, b] = [c, x, 0];
+			else if (h < 120) [r, g, b] = [x, c, 0];
+			else if (h < 180) [r, g, b] = [0, c, x];
+			else if (h < 240) [r, g, b] = [0, x, c];
+			else if (h < 300) [r, g, b] = [x, 0, c];
+			else [r, g, b] = [c, 0, x];
+			return `${Math.round((r + m) * 255)},${Math.round((g + m) * 255)},${Math.round((b + m) * 255)}`;
+		}
+
+		return null;
+	};
+
 	// Analyze color palette
 	const colors = cssData.colors;
+	const normalizedColors = new Set(colors.map(normalizeColor).filter(Boolean));
+	const uniqueColorCount = normalizedColors.size;
 	if (colors.length > 0) {
-		if (colors.length > 500) {
+		if (uniqueColorCount > 50) {
 			findings.push({
 				category: 'Colour Palette',
 				severity: 'info',
-				issue: `The CSS uses ${colors.length} different color values. A large number of unique colors can make the design feel inconsistent and harder to maintain.`,
-				recommendation: 'Consider consolidating to a defined color palette using CSS variables. Aim for 8-12 shades per color family (greys, primary, accents).',
+				issue: `The CSS uses about ${uniqueColorCount} distinct colors after normalization. A large number of unique colors can make the design feel inconsistent and harder to maintain.`,
+				recommendation: 'Consolidate to a smaller, intentional palette. Reuse existing shades before introducing new ones, and keep color roles consistent across components.',
 			});
-		} else if (colors.length <= 15 && cssData.cssVariables.some(v => v.name.includes('color'))) {
+		} else if (uniqueColorCount <= 15 && cssData.cssVariables.some(v => v.name.includes('color'))) {
 			strengths.push('CSS uses a well-defined color palette with CSS variables for consistency.');
 		}
 	}
@@ -174,7 +216,15 @@ function analyzeCSS(cssData) {
 	// Analyze font families
 	const definedFonts = cssData.fonts || [];
 	const usedFonts = cssData.usedFonts || [];
-	const fontMetric = usedFonts.length > 0 ? usedFonts.length : definedFonts.length;
+	const FONT_IGNORE = [
+		'font awesome', 'material icons', 'ionicons', 'bootstrap-icons',
+		'arial', 'helvetica', 'sans-serif', 'serif', 'monospace',
+		'system-ui', '-apple-system', 'segoe ui', 'ui-sans-serif', 'ui-serif', 'ui-monospace'
+	];
+	const filterFonts = (fonts) => fonts.filter(font => !FONT_IGNORE.some(ignore => font.includes(ignore)));
+	const effectiveUsedFonts = filterFonts(usedFonts);
+	const effectiveDefinedFonts = filterFonts(definedFonts);
+	const fontMetric = effectiveUsedFonts.length > 0 ? effectiveUsedFonts.length : effectiveDefinedFonts.length;
 	if (fontMetric > 4) {
 		findings.push({
 			category: 'Typography',
@@ -186,16 +236,9 @@ function analyzeCSS(cssData) {
 		strengths.push('Font usage is restrained — limited to a focused set of typefaces.');
 	}
 
-	// Analyze media queries for responsive design
+	// Analyze media queries for responsive design (advisory only; no finding)
 	const allMediaQueries = cssData.stylesheets.flatMap(s => s.mediaQueries);
-	if (allMediaQueries.length === 0) {
-		findings.push({
-			category: 'Spacing & Layout',
-			severity: 'warning',
-			issue: 'No responsive media queries detected. The site may not adapt well to different screen sizes.',
-			recommendation: 'Add media queries to adjust layout, spacing, and font sizes for mobile, tablet, and desktop viewports.',
-		});
-	} else {
+	if (allMediaQueries.length > 0) {
 		strengths.push(`Responsive design detected with ${allMediaQueries.length} media queries for different screen sizes.`);
 	}
 
@@ -223,13 +266,6 @@ function analyzeCSS(cssData) {
 	// Analyze CSS variables usage
 	if (cssData.cssVariables.length > 0) {
 		strengths.push(`CSS custom properties (variables) are being used — ${cssData.cssVariables.length} variables defined.`);
-	} else {
-		findings.push({
-			category: 'Code Quality',
-			severity: 'info',
-			issue: 'No CSS custom properties (variables) detected. Using CSS variables makes themes and design system changes much easier.',
-			recommendation: 'Define CSS variables for colors, spacing, and font sizes in :root to enable easy theme adjustments.',
-		});
 	}
 
 	// Check for !important overuse
@@ -265,14 +301,7 @@ function analyzeCSS(cssData) {
 		sheet.rules.filter(rule => rule.styles['box-shadow'] && rule.styles['box-shadow'] !== 'none')
 	);
 
-	if (rulesWithShadows.length === 0) {
-		findings.push({
-			category: 'Visual Polish',
-			severity: 'info',
-			issue: 'No box-shadow properties detected. Subtle shadows add depth and help distinguish interactive elements from the background.',
-			recommendation: 'Add subtle shadows to cards, buttons, and floating elements. Example: box-shadow: 0 2px 4px rgba(0,0,0,0.1);',
-		});
-	} else {
+	if (rulesWithShadows.length > 0) {
 		strengths.push(`Shadows are used effectively in ${rulesWithShadows.length} rules for depth and hierarchy.`);
 	}
 
@@ -288,16 +317,20 @@ function analyzeCSS(cssData) {
 	}
 
 	// Check for text-align usage
-	const textAlignRules = cssData.stylesheets.flatMap(sheet =>
-		sheet.rules.filter(rule => rule.styles['text-align'])
+	const centeredBodyText = cssData.stylesheets.flatMap(sheet =>
+		sheet.rules.filter(rule => {
+			const align = (rule.styles['text-align'] || '').trim().toLowerCase();
+			if (align !== 'center') return false;
+			const selector = (rule.selector || '').toLowerCase();
+			return /(^|[\s>+~,])(p|article|body|main)\b|\.text\b|\.content\b/.test(selector);
+		})
 	);
 
-	const centerAlignedCount = textAlignRules.filter(r => r.styles['text-align'] === 'center').length;
-	if (centerAlignedCount > textAlignRules.length * 0.5 && textAlignRules.length > 10) {
+	if (centeredBodyText.length > 3) {
 		findings.push({
 			category: 'Typography',
 			severity: 'info',
-			issue: `Many elements use center text alignment (${centerAlignedCount} rules). Center-aligned body text is harder to read than left-aligned text.`,
+			issue: `Centered alignment is used on body-text selectors in ${centeredBodyText.length} CSS rules. Long-form body text is usually easier to read when left-aligned.`,
 			recommendation: 'Reserve center alignment for headings and short text. Use left alignment (or right for RTL languages) for paragraphs and body content.',
 		});
 	}
@@ -351,6 +384,6 @@ function analyzeCSS(cssData) {
 		cssData,
 		findings,
 		strengths,
-		summary: `Analyzed ${cssData.stylesheets.length} stylesheets with ${colors.length} colors and ${fontMetric} font families.`,
+		summary: `Analyzed ${cssData.stylesheets.length} stylesheets with ${uniqueColorCount} distinct colors and ${fontMetric} non-system font families.`,
 	};
 }

@@ -109,6 +109,47 @@
 					: { label: 'Needs Work', color: '#ef4444', darkColor: '#fca5a5' }
 	);
 
+	/**
+	 * Build candidate filenames for a book image using common extensions.
+	 * This prevents broken images when catalog/file extensions drift.
+	 * @param {string} src
+	 */
+	function bookImageCandidates(src) {
+		const base = (src || '').replace(/\.(png|jpe?g|webp)$/i, '');
+		const candidates = [src, `${base}.png`, `${base}.jpg`, `${base}.jpeg`].filter(Boolean);
+		return [...new Set(candidates)];
+	}
+
+	/**
+	 * @param {string} src
+	 */
+	function bookImagePath(src) {
+		const first = bookImageCandidates(src)[0] || src;
+		return `/book-images/${first}`;
+	}
+
+	/**
+	 * @param {Event} evt
+	 */
+	function handleBookImageError(evt) {
+		const imgEl = /** @type {HTMLImageElement} */ (evt.currentTarget);
+		const rawSrc = imgEl.dataset.bookSrc || '';
+		const candidates = bookImageCandidates(rawSrc);
+		const currentTry = parseInt(imgEl.dataset.tryIdx || '0', 10);
+		const nextTry = currentTry + 1;
+
+		if (nextTry < candidates.length) {
+			imgEl.dataset.tryIdx = String(nextTry);
+			imgEl.src = `/book-images/${candidates[nextTry]}`;
+			return;
+		}
+
+		imgEl.style.display = 'none';
+		const wrap = imgEl.closest('[data-book-image-wrap]');
+		const fallback = wrap?.querySelector('[data-book-image-missing]');
+		if (fallback instanceof HTMLElement) fallback.style.display = 'block';
+	}
+
 	async function analyse() {
 		if (!url.trim()) return;
 		loading = true;
@@ -322,7 +363,10 @@
 					stroke-linecap="round"
 				/>
 			</svg>
-			<span style="font-weight:700;font-size:16px;letter-spacing:-0.02em;">Percepta</span>
+			<div style="display:flex;align-items:flex-end;gap:5px;">
+				<span style="font-weight:700;font-size:16px;letter-spacing:-0.02em;">Percepta</span>
+				<span style="font-size:11px;font-weight:700;letter-spacing:-0.02em;color:#9ca3af;line-height:1.6;">Beta</span>
+			</div>
 		</div>
 		<div style="display:flex;align-items:center;gap:12px;">
 			<!-- Theme toggle switch -->
@@ -988,13 +1032,17 @@
 												{#if f.bookImages && f.bookImages.length > 0}
 													<div style="margin-top:10px;border-top:1px solid {c(cat)}25;padding-top:10px;display:flex;flex-direction:column;gap:12px;">
 																	{#each f.bookImages as img}
-																		<div>
+																		<div data-book-image-wrap>
 																			<img
-																				src="/book-images/{img.src}"
+																				src={bookImagePath(img.src)}
+																				data-book-src={img.src}
+																				data-try-idx="0"
 																				alt={img.caption}
 																				loading="lazy"
+																				onerror={handleBookImageError}
 																				style="width:92%;border-radius:6px;border:1px solid {c(cat)}25;display:block;background:#fff;"
 																			/>
+																			<p data-book-image-missing style="display:none;font-size:11px;color:var(--text-4);margin-top:5px;line-height:1.45;">Reference image unavailable in local assets.</p>
 																			<p style="font-size:11px;color:var(--text-3);margin-top:5px;line-height:1.45;">{img.caption}</p>
 																		</div>
 																	{/each}

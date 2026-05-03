@@ -144,7 +144,7 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
             findings.push({
                 id: nid(),
                 category: 'Visual Hierarchy',
-                severity: 'warning',
+                severity: 'critical',
                 noImages: true,
                 element: `Page has very little content — ${mainTextChars} characters of visible text and ${mainInteractive} interactive element${mainInteractive !== 1 ? 's' : ''} in the main area`,
                 issue: `This page contains almost no visible content: only ${mainTextChars} characters of text and ${mainInteractive} interactive element${mainInteractive !== 1 ? 's' : ''} outside the nav and footer. Near-empty pages pass most perceptual checks by default — not because the design is strong, but because there is too little to assess. Users landing on a sparse page with no navigation, minimal copy, and a single action have no visual signals to orient themselves or understand the page's purpose before acting.`,
@@ -1612,12 +1612,22 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
             e.fontSize <= bodyFontMax &&
             e.rect.w >= minWidth
         );
+        const proseTags = new Set(['p', 'blockquote', 'article']);
+        const isProseLike = (e) => {
+            const txtLen = (e.textContent || '').trim().length;
+            const multiline = e.rect.h >= e.fontSize * 3;
+            const proseTag = proseTags.has(e.tag);
+            // Restrict line-length checks to substantial, paragraph-like text blocks.
+            // Short labels, menu items, and button/link captions are not reading-flow text.
+            return txtLen >= 120 && multiline && proseTag;
+        };
+        const proseBodyText = bodyText.filter(isProseLike);
         const estCharsPerLine = (e) => e.rect.w / (e.fontSize * charWidthFactor);
-        const tooWide = bodyText.filter(e => estCharsPerLine(e) > maxChars);
+        const tooWide = proseBodyText.filter(e => estCharsPerLine(e) > maxChars);
         // Only count elements tall enough to hold at least 5 wrapped lines AND
         // containing substantial text (200+ chars) — short cards, labels, and nav
         // captions are intentionally brief and are not a reading-flow problem.
-        const tooNarrow = bodyText.filter(e =>
+        const tooNarrow = proseBodyText.filter(e =>
             estCharsPerLine(e) < minChars &&
             e.rect.h > e.fontSize * 5 &&
             (e.textContent || '').trim().length >= 200
@@ -1697,7 +1707,7 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
             lineFindingPushed = true;
         }
 
-        if (!lineFindingPushed && bodyText.length >= 3) {
+        if (!lineFindingPushed && proseBodyText.length >= 2) {
             strengths.push('Text blocks are a comfortable width for reading — line lengths are within the 45–75 character optimal range.');
         }
     }
@@ -1818,20 +1828,49 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
         }
 
         // Link colour vs body text: links should not be indistinguishable from static text
-        const links = textEls.filter(e => e.tag === 'a' && e.rect.w > 10);
+        // Ignore tiny locale toggles like "DE | EN" — these are navigation utilities,
+        // not inline reading-flow links.
+        const links = textEls.filter(e =>
+            e.tag === 'a' &&
+            e.rect.w > 10 &&
+            (e.textContent || '').trim().length >= 4
+        );
         const bodyTexts = textEls.filter(e => ['p', 'li', 'td', 'span'].includes(e.tag));
         if (links.length >= 3 && bodyTexts.length >= 5) {
             const medianVal = (arr) => arr.sort((a, b) => a - b)[Math.floor(arr.length / 2)];
-            const linkHues = links.map(e => rgbToHsl(e.color[0], e.color[1], e.color[2])[0]);
-            const bodyHues = bodyTexts.map(e => rgbToHsl(e.color[0], e.color[1], e.color[2])[0]);
+            const linkHsl = links.map(e => rgbToHsl(e.color[0], e.color[1], e.color[2]));
+            const bodyHsl = bodyTexts.map(e => rgbToHsl(e.color[0], e.color[1], e.color[2]));
+            const linkHues = linkHsl.map(v => v[0]);
+            const bodyHues = bodyHsl.map(v => v[0]);
+            const linkSats = linkHsl.map(v => v[1]);
+            const bodySats = bodyHsl.map(v => v[1]);
             const linkLumas = links.map(e => luma(e.color[0], e.color[1], e.color[2]));
             const bodyLumas = bodyTexts.map(e => luma(e.color[0], e.color[1], e.color[2]));
             const hueDiff = Math.min(
                 Math.abs(medianVal(linkHues) - medianVal(bodyHues)),
                 1 - Math.abs(medianVal(linkHues) - medianVal(bodyHues))
             );
+            const satDiff = Math.abs(medianVal(linkSats) - medianVal(bodySats));
             const lumaDiff = Math.abs(medianVal(linkLumas) - medianVal(bodyLumas));
-            if (hueDiff < 0.05 && lumaDiff < 0.10) {
+            // Require similarity in hue, saturation, and brightness before flagging.
+            if (hueDiff < 0.05 && satDiff < 0.08 && lumaDiff < 0.10) {
+                // Suppress if a meaningful fraction of links already have a distinct colour —
+                // e.g. a pink "Details" link proves the design does use colour for affordance.
+                const medianBodyHue = medianVal(bodyHues);
+                const medianBodySat = medianVal(bodySats);
+                const medianBodyLuma = medianVal(bodyLumas);
+                const distinctLinks = links.filter(e => {
+                    const [lh, ls] = rgbToHsl(e.color[0], e.color[1], e.color[2]);
+                    const ll = luma(e.color[0], e.color[1], e.color[2]);
+                    const hd = Math.min(Math.abs(lh - medianBodyHue), 1 - Math.abs(lh - medianBodyHue));
+                    const sd = Math.abs(ls - medianBodySat);
+                    const ld = Math.abs(ll - medianBodyLuma);
+                    return hd > 0.05 || sd > 0.15 || ld > 0.15;
+                });
+                if (distinctLinks.length >= links.length * 0.20) {
+                    // At least 20 % of links are visibly distinct — the site does use colour
+                    // for link affordance; don't flag.
+                } else {
                 const linksWithUnderline = links.filter(e => (e.textDecoration || 'none').includes('underline'));
                 const hasUnderlineFallback = linksWithUnderline.length >= links.length * 0.7;
                 findings.push({
@@ -1849,6 +1888,7 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                         : 'Use a clearly distinct colour for links, typically your brand primary or conventional blue. If you prefer subtle links, add an underline as a minimum so they are always distinguishable from static text regardless of hover state.',
                     boundingBox: toBBox(links[0].rect, vpW, vpH),
                 });
+                } // end else (not enough distinct links)
             }
         }
 
@@ -3172,7 +3212,7 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
 
     // ── Score + return ─────────────────────────────────────────────────────────
     const penalty = findings.reduce(
-        (acc, f) => acc + (f.severity === 'critical' ? 12 : f.severity === 'warning' ? 7 : 2), 0
+        (acc, f) => acc + (f.severity === 'critical' ? 12 : f.severity === 'warning' ? 7 : 3), 0
     );
     // Cap penalty so the minimum score stays meaningful (not zero for busy pages)
     const overallScore = Math.max(20, Math.min(95, 95 - Math.min(penalty, 70)));

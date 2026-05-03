@@ -158,7 +158,7 @@ function analyzeJS(jsData) {
 	const inlineScripts = jsData.scripts.filter(s => s.inline).length;
 	const totalScripts = jsData.scripts.length;
 
-	if (totalScripts > 30) {
+	if (totalScripts > 40) {
 		findings.push({
 			category: 'Performance',
 			severity: 'warning',
@@ -178,13 +178,33 @@ function analyzeJS(jsData) {
 		});
 	}
 
+	const EXTENSION_PATTERNS = [
+		/chrome-extension:/i,
+		/moz-extension:/i,
+		/extensions\//i,
+		/^uncaught \(in promise\)/i,
+	];
+	const THIRD_PARTY_PATTERNS = [
+		/googletagmanager/i,
+		/google-analytics/i,
+		/analytics/i,
+		/doubleclick/i,
+		/facebook/i,
+		/twitter/i,
+	];
+	const isLikelyFirstPartyError = (msg) => {
+		if (!msg || typeof msg !== 'string') return false;
+		return !EXTENSION_PATTERNS.some(p => p.test(msg)) && !THIRD_PARTY_PATTERNS.some(p => p.test(msg));
+	};
+	const firstPartyConsoleErrors = (jsData.consoleErrors || []).filter(isLikelyFirstPartyError);
+
 	// Check console errors
-	if (jsData.consoleErrors.length > 0) {
+	if (firstPartyConsoleErrors.length > 0) {
 		findings.push({
 			category: 'Code Quality',
 			severity: 'critical',
-			issue: `${jsData.consoleErrors.length} JavaScript error${jsData.consoleErrors.length !== 1 ? 's' : ''} logged to console. Errors can break functionality and degrade user experience.`,
-			recommendation: `Fix these errors: ${jsData.consoleErrors.slice(0, 3).join('; ')}${jsData.consoleErrors.length > 3 ? '...' : ''}`,
+			issue: `${firstPartyConsoleErrors.length} first-party JavaScript error${firstPartyConsoleErrors.length !== 1 ? 's' : ''} logged to console. Errors can break functionality and degrade user experience.`,
+			recommendation: `Fix these errors: ${firstPartyConsoleErrors.slice(0, 3).join('; ')}${firstPartyConsoleErrors.length > 3 ? '...' : ''}`,
 		});
 	}
 

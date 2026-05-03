@@ -235,13 +235,93 @@ Use this technical context to provide more informed recommendations about the vi
 }
 
 /**
- * Pre-filter images by checking if basic conditions are met based on finding text.
+ * Pre-filter images by checking if basic conditions are met based on full finding context.
  * Returns true if the image should be kept (condition likely met or no clear condition).
  * Returns false if the condition is clearly not met.
  */
-function checkImageConditionAgainstFinding(imageDesc, findingText, findingCategory) {
+function checkImageConditionAgainstFinding(imageSrc, imageDesc, finding) {
 	const descLower = imageDesc.toLowerCase();
-	const textLower = findingText.toLowerCase();
+	const textLower = `${finding?.id || ''} ${finding?.category || ''} ${finding?.element || ''} ${finding?.issue || ''} ${finding?.recommendation || ''}`.toLowerCase();
+
+	const hasAny = (arr) => arr.some(k => textLower.includes(k));
+
+	// "shown only with imageXX" examples should not be selected directly.
+	// They are still included automatically when their paired primary image is selected.
+	if (/only with image\d+|only if image\d+ is shown/.test(descLower)) return false;
+
+	// Strict per-image guards for the currently active image-enabled checks.
+	// This enforces desc.txt-style "show only if" requirements.
+	const strictRules = {
+		'image122.jpg': () => hasAny(['paragraph', 'line spacing', 'line-height', 'tight spacing', 'text block']) && !hasAny(['button', 'link', 'nav', 'menu']),
+		'image124.jpg': () => hasAny(['paragraph', 'line spacing', 'line-height', 'tight spacing', 'text block']) && !hasAny(['button', 'link', 'nav', 'menu']),
+		'image225.png': () => hasAny(['text over image', 'text over photo', 'placed over image', 'photo', 'overlay', 'patterned background']) && hasAny(['contrast', 'hard to read', 'unreadable']),
+		'image227.png': () => hasAny(['text over image', 'text over photo', 'placed over image', 'photo', 'overlay', 'patterned background']) && hasAny(['contrast', 'hard to read', 'unreadable']),
+		'image230.png': () => hasAny(['text over image', 'text over photo', 'placed over image', 'photo', 'overlay', 'patterned background']) && hasAny(['contrast', 'hard to read', 'unreadable']),
+		'image183.jpg': () => hasAny(['contrast', 'hard to read', 'unreadable']) && hasAny(['text', 'background']),
+		'image185.jpg': () => hasAny(['contrast', 'hard to read', 'unreadable']) && hasAny(['text', 'background']),
+		'image54.png': () => hasAny(['icon']) && hasAny(['text', 'heavy', 'weight']),
+		'image55.png': () => hasAny(['icon']) && hasAny(['text', 'heavy', 'weight']),
+		'image277.jpg': () => hasAny(['split', 'left-right', 'two column', 'column']) && hasAny(['imbalance', 'heavy', 'weight']),
+		'image281.jpg': () => hasAny(['split', 'left-right', 'two column', 'column']) && hasAny(['imbalance', 'heavy', 'weight']),
+		'image282.jpg': () => hasAny(['split', 'left-right', 'two column', 'column']) && hasAny(['imbalance', 'heavy', 'weight']),
+		'image51.png': () => hasAny(['heading', 'h1', 'h2']) && hasAny(['oversized', 'too big', 'outweigh', 'hierarchy']),
+		'image52.png': () => hasAny(['heading', 'h1', 'h2']) && hasAny(['oversized', 'too big', 'outweigh', 'hierarchy']),
+		'image53.png': () => hasAny(['heading', 'h1', 'h2', 'hierarchy']),
+		'image58.png': () => hasAny(['button']) && hasAny(['same', 'equal', 'primary', 'secondary', 'tertiary', 'weight']),
+		'image59.png': () => hasAny(['button']) && hasAny(['same', 'equal', 'primary', 'secondary', 'tertiary', 'weight']),
+		'image127.png': () => hasAny(['link']) && hasAny(['indistinguishable', 'unstyled', 'blend', 'underline', 'same color', 'same colour']),
+		'image128.png': () => hasAny(['link']) && hasAny(['indistinguishable', 'unstyled', 'blend', 'underline', 'same color', 'same colour']),
+		'image129.png': () => hasAny(['link']) && hasAny(['indistinguishable', 'unstyled', 'blend', 'underline', 'same color', 'same colour']),
+		'image251.jpeg': () => hasAny(['link']) && hasAny(['indistinguishable', 'unstyled', 'blend', 'underline', 'same color', 'same colour']),
+		'image102.png': () => hasAny(['type scale', 'font size', 'typographic hierarchy', 'arbitrary', 'spacing scale', 'different spacing values', 'inconsistent spacing', 'random spacing']),
+		'image105.png': () => hasAny(['type scale', 'font size', 'typographic hierarchy', 'arbitrary', 'spacing scale', 'different spacing values', 'inconsistent spacing', 'random spacing']),
+		'image112.jpg': () => hasAny(['line length', 'characters per line', 'text block', 'too wide', '90', '110']),
+		'image132.jpg': () => hasAny(['center', 'centred', 'centered', 'alignment']) && hasAny(['line', 'paragraph', 'text']),
+		'image133.jpg': () => hasAny(['center', 'centred', 'centered', 'alignment']) && hasAny(['line', 'paragraph', 'text']),
+		'image141.jpg': () => hasAny(['all-caps', 'uppercase']) && hasAny(['letter-spacing', 'spacing']),
+		'image37.png': () => hasAny(['grey', 'gray']) && hasAny(['colored background', 'coloured background', 'tinted', 'card']),
+		'image41.png': () => hasAny(['grey', 'gray']) && hasAny(['colored background', 'coloured background', 'tinted', 'card']),
+		'image151.jpeg': () => hasAny(['palette', 'few colors', 'few colours', 'limited']) && hasAny(['color', 'colour', 'grey', 'gray']),
+		'image153.png': () => hasAny(['grey', 'gray', 'scale', 'shades']),
+		'image180.png': () => hasAny(['grey', 'gray']) && hasAny(['temperature', 'cool', 'warm', 'neutral']),
+		'image181.png': () => hasAny(['grey', 'gray']) && hasAny(['temperature', 'cool', 'warm', 'neutral']),
+		'image63.jpeg': () => hasAny(['cramped', 'compressed', 'tight spacing', 'padding', 'spacing']) && hasAny(['form', 'field', 'input', 'label', 'text']),
+		'image65.jpeg': () => hasAny(['cramped', 'compressed', 'tight spacing', 'padding', 'spacing']) && hasAny(['form', 'field', 'input', 'label', 'text']),
+		'image72.png': () => hasAny(['full-width', 'stretched', 'spread out', 'too wide', 'line lengths uncomfortable']),
+		'image94.png': () => hasAny(['too small', 'touch target', 'minimum size', '32x32', '31x19']),
+		'image95.png': () => hasAny(['too small', 'touch target', 'minimum size', '32x32', '31x19']),
+		'image205.png': () => hasAny(['button']) && hasAny(['shadow', 'raised', 'flat']),
+		'image233.jpg': () => hasAny(['icon']) && hasAny(['40+px', 'oversized', 'too large', 'scaled']),
+		'image242.png': () => hasAny(['aspect ratio', 'variable-height', 'card grid', 'grid alignment']),
+	};
+
+	if (strictRules[imageSrc] && !strictRules[imageSrc]()) return false;
+
+	// Hard gate for paragraph-specific examples: only allow when the finding is
+	// clearly about paragraph/body-text readability or paragraph line metrics.
+	const paragraphOnlyCondition =
+		/paragraph|body text|text area has\s*\d+\+?\s*characters|\d+\+?\s*lines/i.test(descLower);
+	if (paragraphOnlyCondition) {
+		const paragraphSignals = [
+			'paragraph',
+			'body text',
+			'line length',
+			'characters per line',
+			'lines longer than',
+			'text block',
+		];
+		const nonParagraphSignals = [
+			'button',
+			'link',
+			'nav',
+			'menu',
+			'icon',
+			'target',
+		];
+		const hasParagraphSignal = paragraphSignals.some(s => textLower.includes(s));
+		const hasNonParagraphSignal = nonParagraphSignals.some(s => textLower.includes(s));
+		if (!hasParagraphSignal || hasNonParagraphSignal) return false;
+	}
 
 	// Extract condition from "show this only if X" or "show this image only if X" patterns
 	const onlyIfMatch = descLower.match(/show this (?:image )?only if (.+?)(?:\.|$|together|shown)/);
@@ -282,7 +362,7 @@ function checkImageConditionAgainstFinding(imageDesc, findingText, findingCatego
 		// Typography
 		{ pattern: /text.*relative unit.*em/i, keywords: ['em unit', 'relative unit', 'responsive text'] },
 		{ pattern: /paragraph.*\d\+ lines/i, keywords: ['paragraph', 'long text', 'body text'] },
-		{ pattern: /line.*90-110 char/i, keywords: ['line length', 'character count', 'wide text'] },
+		{ pattern: /line.*90-110 char/i, keywords: ['line length', 'character count', 'wide text', 'characters per line'] },
 		// Layout
 		{ pattern: /element.*lot of text.*spacing.*small/i, keywords: ['tight spacing', 'cramped', 'padding'] },
 		{ pattern: /spacing between these elements is too random|spacing.*too random/i, keywords: ['spacing values', 'different spacing', 'inconsistent spacing', 'random spacing', 'too many spacing'] },
@@ -298,7 +378,7 @@ function checkImageConditionAgainstFinding(imageDesc, findingText, findingCatego
 		{ pattern: /graph/i, keywords: ['graph', 'chart', 'visualization', 'trend'] },
 		// Links
 		{ pattern: /link.*no styling/i, keywords: ['link', 'anchor', 'href'] },
-		{ pattern: /links.*indistinguishable|links.*unstyled|links.*lack.*visual|links.*blend/i, keywords: ['link', 'indistinguishable', 'unstyled', 'blend', 'body text'] },
+		{ pattern: /links.*indistinguishable|links.*unstyled|links.*lack.*visual|links.*blend/i, keywords: ['link', 'indistinguishable', 'unstyled', 'blend', 'body text', 'underline', 'same color', 'same colour'] },
 		// Interactive targets
 		{ pattern: /small.*interactive.*element|touch target.*minimum|element.*smaller.*32px|small.*touch target/i, keywords: ['element', 'button', 'target', 'touch', 'smaller', '32', 'px'] },
 		// Custom styling
@@ -331,8 +411,11 @@ function checkImageConditionAgainstFinding(imageDesc, findingText, findingCatego
 		}
 	}
 
-	// Condition pattern not recognized or too complex to check algorithmically
-	// Let Gemini decide, but be conservative
+	// Condition pattern not recognized or too complex to check algorithmically.
+	// Stay conservative: allow only if the finding still shares core topical overlap.
+	if (finding?.category && !textLower.includes(String(finding.category).toLowerCase())) {
+		return hasAny(['text', 'button', 'link', 'spacing', 'heading', 'icon', 'image', 'color', 'colour', 'contrast']);
+	}
 	return true;
 }
 
@@ -485,7 +568,50 @@ function preserveQuotedReference(rewritten, original) {
 	return { ...rewritten, issue: `${issue.trim()}${suffix}`.trim() };
 }
 
-async function callGeminiWithFindings(apiKey, findings, overallScore, codeContext = null) {
+/**
+ * @param {number} value
+ */
+function clamp01(value) {
+	if (!Number.isFinite(value)) return 0;
+	if (value < 0) return 0;
+	if (value > 1) return 1;
+	return value;
+}
+
+/**
+ * Lightweight confidence fallback when model omits confidence.
+ * @param {any} finding
+ */
+function inferConfidence(finding) {
+	let confidence = 0.85;
+	const severity = String(finding?.severity || '').toLowerCase();
+	if (severity === 'info') confidence *= 0.8;
+	if (severity === 'warning') confidence *= 0.9;
+
+	const text = `${finding?.element || ''} ${finding?.issue || ''}`;
+	const m = text.match(/\b(\d+)\b/);
+	const affectedCount = m ? parseInt(m[1], 10) : 0;
+	if (affectedCount > 0 && affectedCount < 3) confidence *= 0.75;
+
+	if (/\bfooter\b|\bbottom\b/i.test(text)) confidence *= 0.8;
+
+	return Math.round(clamp01(confidence) * 100) / 100;
+}
+
+/**
+ * Keep score math consistent with algorithmic.js but recompute from a provided
+ * findings list so UI score matches the actually displayed findings.
+ * @param {Array<{ severity?: string }>} findings
+ */
+function computeOverallScoreFromFindings(findings) {
+	const penalty = (findings || []).reduce(
+		(acc, f) => acc + (f.severity === 'critical' ? 12 : f.severity === 'warning' ? 7 : 3),
+		0
+	);
+	return Math.max(20, Math.min(95, 95 - Math.min(penalty, 70)));
+}
+
+async function callGeminiWithFindings(apiKey, findings, overallScore, codeContext = null, screenshotB64 = null) {
 	const scopedFindings = filterFindingsToActiveScope(findings);
 	const sourceById = new Map(scopedFindings.map(f => [f.id, f]));
 	const spacingScaleFindingIds = new Set(
@@ -578,7 +704,7 @@ For each selected image, return an object with:
 				return img.src !== 'image102.png' && img.src !== 'image105.png';
 			})
 			// Pre-filter by checking basic conditions against finding text
-			.filter(img => checkImageConditionAgainstFinding(img.desc, f.issue, f.category))
+			.filter(img => checkImageConditionAgainstFinding(img.src, img.desc, f))
 			.map(({ src, desc, pair }) => {
 				/** @type {{ src: string, desc: string, pair?: string }} */
 				const entry = { src, desc };
@@ -620,7 +746,10 @@ For each selected image, return an object with:
 	const body = JSON.stringify({
 		system_instruction: { parts: [{ text: systemInstruction }] },
 		contents: [{
-			parts: [{ text: bodyPayload }]
+			parts: [
+				...(screenshotB64 ? [{ inline_data: { mime_type: 'image/png', data: screenshotB64 } }] : []),
+				{ text: bodyPayload }
+			]
 		}],
 		generationConfig: {
 			maxOutputTokens: 16384,
@@ -659,6 +788,25 @@ For each selected image, return an object with:
 				const result = JSON.parse(cleaned);
 				if (Array.isArray(result.findings)) {
 					result.findings = result.findings.map(f => preserveQuotedReference(f, sourceById.get(f.id)));
+					result.findings = result.findings
+						.map(f => {
+							const validated = typeof f.validated === 'boolean' ? f.validated : true;
+							const confidence = Math.round(clamp01(
+								typeof f.confidence === 'number' ? f.confidence : inferConfidence(f)
+							) * 100) / 100;
+							return {
+								...f,
+								validated,
+								validationReason: typeof f.validationReason === 'string'
+									? f.validationReason
+									: (validated ? 'Visually supported in screenshot.' : 'Not visually supported in screenshot.'),
+								confidence,
+							};
+						})
+						.filter(f => f.validated && f.confidence >= 0.7);
+					if (result.findings.length === 0) {
+						result.summary = result.summary || 'No visually validated issues were confirmed in this screenshot.';
+					}
 					// First pass: resolve & validate images per finding
 					result.findings = result.findings.map(f => {
 						const rawImages = Array.isArray(f.bookImages) ? f.bookImages : [];
@@ -734,7 +882,12 @@ For each selected image, return an object with:
 	// Fallback: gemini-2.0-flash � older model, higher availability, no thinkingConfig
 	const fallbackBody = JSON.stringify({
 		system_instruction: { parts: [{ text: systemInstruction }] },
-		contents: [{ parts: [{ text: bodyPayload }] }],
+		contents: [{
+			parts: [
+				...(screenshotB64 ? [{ inline_data: { mime_type: 'image/png', data: screenshotB64 } }] : []),
+				{ text: bodyPayload }
+			]
+		}],
 		generationConfig: {
 			maxOutputTokens: 16384,
 			responseMimeType: 'application/json',
@@ -801,10 +954,13 @@ export async function POST({ request }) {
 				await page.evaluate(async () => {
 					const ACCEPT_TEXTS = [
 						'accept all', 'accept cookies', 'agree', 'i agree', 'allow all',
-						'allow cookies', 'got it', 'ok', 'okay', 'continue', 'close',
+						'allow cookies', 'accept', 'accept all cookies', 'allow all cookies',
+						'got it', 'ok', 'okay', 'continue', 'close', 'save preferences',
 						'zustimmen', 'alle akzeptieren', 'akzeptieren',  // German
 						'tout accepter', 'accepter', 'fermer',            // French
 						'acceptar', 'aceptar todas',                      // Spanish
+						'accetta', 'accetta tutto',                       // Italian
+						'aceitar', 'aceitar tudo',                        // Portuguese
 					];
 					const buttons = Array.from(document.querySelectorAll(
 						'button, [role="button"], a[href="#"], input[type="button"], input[type="submit"]'
@@ -819,7 +975,7 @@ export async function POST({ request }) {
 					}
 				});
 
-				// 2. Remove remaining popups � specific known frameworks + safe heuristics only
+				// 2. Remove remaining popups — specific known frameworks + robust heuristics
 				await page.evaluate(() => {
 					const KNOWN_SELECTORS = [
 						// OneTrust
@@ -849,18 +1005,62 @@ export async function POST({ request }) {
 						});
 					}
 
+					// Hide common CMP iframes (OneTrust/Cookiebot/TrustArc/etc.)
+					document.querySelectorAll('iframe').forEach(frame => {
+						const src = (frame.getAttribute('src') || '').toLowerCase();
+						const title = (frame.getAttribute('title') || '').toLowerCase();
+						const name = (frame.getAttribute('name') || '').toLowerCase();
+						if (/cookie|consent|onetrust|cookielaw|cookiebot|trustarc|didomi|quantcast|sourcepoint|sp_message/.test(src)
+							|| /cookie|consent|gdpr|privacy|cmp|sourcepoint/.test(title)
+							|| /cookie|consent|gdpr|privacy|cmp|sp_message/.test(name)) {
+					/** @type {HTMLElement} */ (frame).style.display = 'none';
+						}
+					});
+
+					// Generic keyword selector sweep for common consent containers.
+					const KEYWORD_SELECTOR = [
+						'[id*="cookie" i]', '[class*="cookie" i]',
+						'[id*="consent" i]', '[class*="consent" i]',
+						'[id*="gdpr" i]', '[class*="gdpr" i]',
+						'[id*="privacy" i]', '[class*="privacy" i]',
+						'[data-testid*="cookie" i]', '[data-testid*="consent" i]',
+						'[aria-label*="cookie" i]', '[aria-label*="consent" i]'
+					].join(',');
+					document.querySelectorAll(KEYWORD_SELECTOR).forEach(el => {
+						const style = window.getComputedStyle(el);
+						const r = el.getBoundingClientRect();
+						const edgeLike = r.width >= window.innerWidth * 0.4 && (r.top <= window.innerHeight * 0.3 || r.bottom >= window.innerHeight * 0.7);
+						if ((style.position === 'fixed' || style.position === 'absolute' || style.position === 'sticky' || edgeLike) && r.height >= 24) {
+					/** @type {HTMLElement} */ (el).style.display = 'none';
+						}
+					});
+
 					// Heuristic: full-page backdrops and bottom cookie bars
 					const vw = window.innerWidth;
 					const vh = window.innerHeight;
-					const CONSENT_KEYWORDS = /cookie|consent|gdpr|privacy|datenschutz|accept|agree|opt.?in/i;
+					const CONSENT_KEYWORDS = /cookie|consent|gdpr|privacy|datenschutz|accept|agree|opt.?in|onetrust|cookielaw|cookiebot|didomi|trustarc|cmp/i;
 					document.querySelectorAll('*').forEach(el => {
 						const style = window.getComputedStyle(el);
-						if (style.position !== 'fixed' && style.position !== 'absolute') return;
-						if ((parseInt(style.zIndex) || 0) < 100) return;
+						if (style.position !== 'fixed' && style.position !== 'absolute' && style.position !== 'sticky') return;
+						if ((parseInt(style.zIndex) || 0) < 10) return;
 						const r = el.getBoundingClientRect();
 						const isFullCoverage = r.width >= vw * 0.85 && r.height >= vh * 0.85;
 						const isBottomCookieBar = r.width >= vw * 0.85 && r.height <= 280
 							&& r.bottom >= vh * 0.75 && style.position === 'fixed';
+						const isTopCookieBar = r.width >= vw * 0.7 && r.height >= 40 && r.height <= vh * 0.6
+							&& r.top <= vh * 0.25;
+						const isConsentLikeBar = r.width >= vw * 0.5 && r.height >= 40 && r.height <= vh * 0.6
+							&& (r.top <= vh * 0.25 || r.bottom >= vh * 0.75);
+
+						const attrBlob = [
+							(el.id || ''),
+							(el.className || ''),
+							(el.getAttribute('role') || ''),
+							(el.getAttribute('aria-label') || ''),
+							(el.getAttribute('data-testid') || ''),
+							(el.getAttribute('data-cy') || ''),
+							(el.getAttribute('data-name') || ''),
+						].join(' ').toLowerCase();
 
 						if (isFullCoverage) {
 							// Only remove if it looks like a consent/GDPR backdrop:
@@ -872,15 +1072,84 @@ export async function POST({ request }) {
 							const isSemiTransparent = alpha < 0.85;
 							const text = /** @type {HTMLElement} */ (el).innerText || '';
 							const hasConsentText = CONSENT_KEYWORDS.test(text);
-							if (isSemiTransparent || hasConsentText) {
+							const hasConsentAttrs = CONSENT_KEYWORDS.test(attrBlob);
+							if (isSemiTransparent || hasConsentText || hasConsentAttrs) {
 						/** @type {HTMLElement} */ (el).style.display = 'none';
 							}
-						} else if (isBottomCookieBar) {
+						} else {
+							const text = /** @type {HTMLElement} */ (el).innerText || '';
+							const hasConsentText = CONSENT_KEYWORDS.test(text);
+							const hasConsentAttrs = CONSENT_KEYWORDS.test(attrBlob);
+							if ((isBottomCookieBar || isTopCookieBar || isConsentLikeBar) && (hasConsentText || hasConsentAttrs)) {
 					/** @type {HTMLElement} */ (el).style.display = 'none';
+							}
 						}
 					});
 
 					// Re-enable body scroll that popups often lock
+					document.body.style.overflow = '';
+					document.documentElement.style.overflow = '';
+				});
+
+				// Some CMPs inject late; run a second pass after a short delay.
+				await new Promise(r => setTimeout(r, 450));
+				await page.evaluate(() => {
+					const CONSENT_KEYWORDS = /cookie|consent|gdpr|privacy|datenschutz|onetrust|cookiebot|didomi|trustarc|cmp/i;
+					const vw = window.innerWidth;
+					const vh = window.innerHeight;
+					document.querySelectorAll('*').forEach(el => {
+						const style = window.getComputedStyle(el);
+						if (style.position !== 'fixed' && style.position !== 'absolute' && style.position !== 'sticky') return;
+						const r = el.getBoundingClientRect();
+						if (r.width < vw * 0.5 || r.height < 40 || r.height > vh * 0.7) return;
+						const edgeBar = r.top <= vh * 0.25 || r.bottom >= vh * 0.75;
+						if (!edgeBar) return;
+						const attrBlob = `${el.id || ''} ${el.className || ''} ${(el.getAttribute('aria-label') || '')}`.toLowerCase();
+						const text = /** @type {HTMLElement} */ (el).innerText || '';
+						if (CONSENT_KEYWORDS.test(attrBlob) || CONSENT_KEYWORDS.test(text)) {
+					/** @type {HTMLElement} */ (el).style.display = 'none';
+						}
+					});
+					document.body.style.overflow = '';
+					document.documentElement.style.overflow = '';
+				});
+
+				// Third pass for very late CMP injection (1.5s after initial load).
+				await new Promise(r => setTimeout(r, 1500));
+				await page.evaluate(() => {
+					const CONSENT_KEYWORDS = /cookie|consent|gdpr|privacy|datenschutz|onetrust|cookiebot|didomi|trustarc|cmp|sourcepoint|sp_message/i;
+					const vw = window.innerWidth;
+					const vh = window.innerHeight;
+
+					// Click accept buttons again in case the CMP appeared late.
+					const lateButtons = Array.from(document.querySelectorAll('button, [role="button"], a[href="#"], input[type="button"], input[type="submit"]'));
+					for (const btn of lateButtons) {
+						const txt = ((btn.textContent || '').trim().toLowerCase());
+						if (/accept|agree|allow|akzept|zustimm|acept|accepter|accetta|aceitar/.test(txt)) {
+					/** @type {HTMLElement} */ (btn).click();
+						}
+					}
+
+					document.querySelectorAll('*').forEach(el => {
+						const style = window.getComputedStyle(el);
+						if (style.position !== 'fixed' && style.position !== 'absolute' && style.position !== 'sticky') return;
+						const r = el.getBoundingClientRect();
+						if (r.width < vw * 0.35 || r.height < 24 || r.height > vh * 0.9) return;
+						const edgeBar = r.top <= vh * 0.3 || r.bottom >= vh * 0.7;
+						const txt = /** @type {HTMLElement} */ (el).innerText || '';
+						const attrs = `${el.id || ''} ${el.className || ''} ${(el.getAttribute('aria-label') || '')} ${(el.getAttribute('data-testid') || '')}`.toLowerCase();
+						if (edgeBar && (CONSENT_KEYWORDS.test(txt) || CONSENT_KEYWORDS.test(attrs))) {
+					/** @type {HTMLElement} */ (el).style.display = 'none';
+						}
+					});
+
+					document.querySelectorAll('iframe').forEach(frame => {
+						const blob = `${frame.getAttribute('src') || ''} ${frame.getAttribute('title') || ''} ${frame.getAttribute('name') || ''}`.toLowerCase();
+						if (CONSENT_KEYWORDS.test(blob)) {
+					/** @type {HTMLElement} */ (frame).style.display = 'none';
+						}
+					});
+
 					document.body.style.overflow = '';
 					document.documentElement.style.overflow = '';
 				});
@@ -988,7 +1257,7 @@ export async function POST({ request }) {
 								isText: TEXT_TAGS.has(tag),
 								isInteractive: INTERACTIVE_TAGS.has(tag),
 								textContent: (TEXT_TAGS.has(tag) || INTERACTIVE_TAGS.has(tag))
-									? (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80)
+									? (((el instanceof HTMLElement ? el.innerText : el.textContent) || '').trim().replace(/\s+/g, ' ').slice(0, 300))
 									: '',
 								alt: tag === 'img' ? (el.getAttribute('alt') || '').trim() : '',
 								fill: (() => { const f = cs.fill; return (f && f !== 'none' && f !== '') ? parseColor(f) : null; })(),
@@ -1091,7 +1360,7 @@ export async function POST({ request }) {
 								isText: TEXT_TAGS.has(tag),
 								isInteractive: INTERACTIVE_TAGS.has(tag),
 								textContent: (TEXT_TAGS.has(tag) || INTERACTIVE_TAGS.has(tag))
-									? (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80)
+									? (((el instanceof HTMLElement ? el.innerText : el.textContent) || '').trim().replace(/\s+/g, ' ').slice(0, 300))
 									: '',
 								alt: tag === 'img' ? (el.getAttribute('alt') || '').trim() : '',
 								fill: (() => { const f = cs.fill; return (f && f !== 'none' && f !== '') ? parseColor(f) : null; })(),
@@ -1115,7 +1384,7 @@ export async function POST({ request }) {
 							js: jsAnalysis.jsData,
 						};
 						_perf('calling Gemini (algo-ai rewrite)...');
-						aiRewrite = await callGeminiWithFindings(apiKey, mergedFindings, algoAnalysis.overallScore, codeContext);
+						aiRewrite = await callGeminiWithFindings(apiKey, mergedFindings, algoAnalysis.overallScore, codeContext, screenshotB64);
 						_perf('Gemini algo-ai rewrite done');
 					} catch (aiErr) {
 						console.warn('[Percepta] Gemini unavailable, falling back to algorithmic results:', aiErr.message);
@@ -1125,6 +1394,12 @@ export async function POST({ request }) {
 					const allStrengths = [
 						...(aiRewrite?.strengths ?? algoAnalysis.strengths),
 					];
+					const displayedFindings = aiRewrite?.findings
+						? filterFindingsToActiveScope(aiRewrite.findings)
+						: filterFindingsToActiveScope([
+							...algoAnalysis.findings,
+						]);
+					const displayedScore = computeOverallScoreFromFindings(displayedFindings);
 
 					const noImages = aiRewrite !== null &&
 						aiRewrite.findings.every(f => (f.bookImages ?? []).length === 0);
@@ -1132,11 +1407,9 @@ export async function POST({ request }) {
 					send({
 						type: 'done', result: {
 							screenshot: screenshotDataUrl,
-							overallScore: algoAnalysis.overallScore,
+							overallScore: displayedScore,
 							summary: aiRewrite?.summary ?? algoAnalysis.summary,
-							findings: aiRewrite?.findings ? filterFindingsToActiveScope(aiRewrite.findings) : filterFindingsToActiveScope([
-								...algoAnalysis.findings,
-							]),
+							findings: displayedFindings,
 							strengths: allStrengths,
 							expertNote: algoAnalysis.expertNote,
 							aiUnavailable: aiRewrite === null,
@@ -1217,7 +1490,7 @@ export async function POST({ request }) {
 								isText: TEXT_TAGS.has(tag),
 								isInteractive: INTERACTIVE_TAGS.has(tag),
 								textContent: (TEXT_TAGS.has(tag) || INTERACTIVE_TAGS.has(tag))
-									? (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80)
+									? (((el instanceof HTMLElement ? el.innerText : el.textContent) || '').trim().replace(/\s+/g, ' ').slice(0, 300))
 									: '',
 								alt: tag === 'img' ? (el.getAttribute('alt') || '').trim() : '',
 								fill: (() => { const f = cs.fill; return (f && f !== 'none' && f !== '') ? parseColor(f) : null; })(),
@@ -1241,7 +1514,7 @@ export async function POST({ request }) {
 							js: jsAnalysis.jsData,
 						};
 						_perf('calling Gemini (compare-algo-ai rewrite)...');
-						aiRewrite = await callGeminiWithFindings(apiKey, mergedFindings, algoResult.overallScore, codeContext);
+						aiRewrite = await callGeminiWithFindings(apiKey, mergedFindings, algoResult.overallScore, codeContext, screenshotB64);
 						_perf('Gemini compare-algo-ai rewrite done');
 					} catch (aiErr) {
 						console.warn('[Percepta] Gemini unavailable, falling back to algorithmic results:', aiErr.message);
@@ -1382,7 +1655,7 @@ export async function POST({ request }) {
 								isText: TEXT_TAGS.has(tag),
 								isInteractive: INTERACTIVE_TAGS.has(tag),
 								textContent: (TEXT_TAGS.has(tag) || INTERACTIVE_TAGS.has(tag))
-									? (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80)
+									? (((el instanceof HTMLElement ? el.innerText : el.textContent) || '').trim().replace(/\s+/g, ' ').slice(0, 300))
 									: '',
 								alt: tag === 'img' ? (el.getAttribute('alt') || '').trim() : '',
 								fill: (() => { const f = cs.fill; return (f && f !== 'none' && f !== '') ? parseColor(f) : null; })(),
