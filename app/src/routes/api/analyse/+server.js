@@ -504,7 +504,8 @@ function isFindingInActiveScope(finding) {
 		const crampedInternal = hasAny(['cramped', 'compressed', 'too close', 'less than 8 pixels', 'tight spacing', 'padding']);
 		const overstretchedRows = hasAny(['full-width', 'stretched', 'spread out', 'too wide', 'line lengths uncomfortable']);
 		const spacingScale = hasAny(['spacing scale', 'different spacing values', 'inconsistent spacing', 'random spacing']);
-		return crampedInternal || overstretchedRows || spacingScale;
+		const stackGapInconsistency = hasAny(['vertical content stack', 'vertically stacked', 'gaps between items', 'same stack', 'uniform gap']);
+		return crampedInternal || overstretchedRows || spacingScale || stackGapInconsistency;
 	}
 
 	if (category === 'Interactive Targets') {
@@ -1192,7 +1193,7 @@ export async function POST({ request }) {
 				});
 
 				// Small pause so any close animations complete before screenshot
-				await new Promise(r => setTimeout(r, 300));
+				await new Promise(r => setTimeout(r, 3000));
 				_perf('cookies dismissed, taking screenshot');
 				send({ type: 'step', step: 1 });
 				const screenshotBuf = await page.screenshot({
@@ -1477,8 +1478,9 @@ export async function POST({ request }) {
 					const allStrengths = [
 						...(aiRewrite?.strengths ?? algoAnalysis.strengths),
 					];
+					const hasAiFindings = Array.isArray(aiRewrite?.findings) && aiRewrite.findings.length > 0;
 					let rescuedHighSeverity = [];
-					const displayedFindings = aiRewrite?.findings
+					const displayedFindings = hasAiFindings
 						? (() => {
 							const aiFindings = filterFindingsToActiveScope(aiRewrite.findings);
 							const aiIds = new Set(aiFindings.map(f => f.id));
@@ -1493,20 +1495,24 @@ export async function POST({ request }) {
 						: baseFindings;
 					const displayedScore = computeOverallScoreFromFindings(displayedFindings);
 
-					const noImages = aiRewrite !== null &&
+					const noImages = hasAiFindings &&
 						aiRewrite.findings.every(f => (f.bookImages ?? []).length === 0);
+					const displayedSummary = hasAiFindings
+						? (aiRewrite?.summary ?? algoAnalysis.summary)
+						: algoAnalysis.summary;
 
 					send({
 						type: 'done', result: {
 							screenshot: screenshotDataUrl,
 							overallScore: displayedScore,
-							summary: aiRewrite?.summary ?? algoAnalysis.summary,
+							summary: displayedSummary,
 							findings: displayedFindings,
 							strengths: allStrengths,
 							expertNote: algoAnalysis.expertNote,
 							aiUnavailable: aiRewrite === null,
 							aiGateReport: aiRewrite?.gateReport ?? null,
 							rescuedHighSeverityCount: rescuedHighSeverity.length,
+							aiFellBackToAlgorithmic: !hasAiFindings && aiRewrite !== null,
 							noImages,
 						}
 					});
