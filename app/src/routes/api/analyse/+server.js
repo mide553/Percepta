@@ -599,6 +599,18 @@ function inferConfidence(finding) {
 }
 
 /**
+ * Severity-aware AI gate thresholds. Higher-severity findings should not require
+ * the same confidence bar as informational polish findings.
+ * @param {{ severity?: string }} finding
+ */
+function confidenceThresholdForFinding(finding) {
+	const severity = String(finding?.severity || '').toLowerCase();
+	if (severity === 'critical') return 0.55;
+	if (severity === 'warning') return 0.65;
+	return 0.75;
+}
+
+/**
  * Keep score math consistent with algorithmic.js but recompute from a provided
  * findings list so UI score matches the actually displayed findings.
  * @param {Array<{ severity?: string }>} findings
@@ -788,22 +800,47 @@ For each selected image, return an object with:
 				const result = JSON.parse(cleaned);
 				if (Array.isArray(result.findings)) {
 					result.findings = result.findings.map(f => preserveQuotedReference(f, sourceById.get(f.id)));
-					result.findings = result.findings
-						.map(f => {
-							const validated = typeof f.validated === 'boolean' ? f.validated : true;
-							const confidence = Math.round(clamp01(
-								typeof f.confidence === 'number' ? f.confidence : inferConfidence(f)
-							) * 100) / 100;
-							return {
-								...f,
-								validated,
-								validationReason: typeof f.validationReason === 'string'
-									? f.validationReason
-									: (validated ? 'Visually supported in screenshot.' : 'Not visually supported in screenshot.'),
-								confidence,
-							};
-						})
-						.filter(f => f.validated && f.confidence >= 0.7);
+					const normalizedFindings = result.findings.map(f => {
+						const source = sourceById.get(f.id) || {};
+						const validated = typeof f.validated === 'boolean' ? f.validated : true;
+						const mergedForConfidence = { ...source, ...f };
+						const confidence = Math.round(clamp01(
+							typeof f.confidence === 'number' ? f.confidence : inferConfidence(mergedForConfidence)
+						) * 100) / 100;
+						return {
+							...f,
+							severity: f.severity ?? source.severity,
+							validated,
+							validationReason: typeof f.validationReason === 'string'
+								? f.validationReason
+								: (validated ? 'Visually supported in screenshot.' : 'Not visually supported in screenshot.'),
+							confidence,
+						};
+					});
+					const dropReasons = { notValidated: 0, lowConfidence: 0 };
+					result.findings = normalizedFindings.filter(f => {
+						if (!f.validated) {
+							dropReasons.notValidated++;
+							return false;
+						}
+						const threshold = confidenceThresholdForFinding(f);
+						if (f.confidence < threshold) {
+							dropReasons.lowConfidence++;
+							return false;
+						}
+						return true;
+					});
+					result.gateReport = {
+						inputCount: normalizedFindings.length,
+						keptCount: result.findings.length,
+						droppedCount: normalizedFindings.length - result.findings.length,
+						dropReasons,
+						thresholds: {
+							critical: 0.55,
+							warning: 0.65,
+							info: 0.75,
+						},
+					};
 					if (result.findings.length === 0) {
 						result.summary = result.summary || 'No visually validated issues were confirmed in this screenshot.';
 					}
@@ -1211,6 +1248,24 @@ export async function POST({ request }) {
 						const vH = window.innerHeight;
 						const TEXT_TAGS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span', 'a', 'li', 'label', 'button', 'td', 'th', 'caption']);
 						const INTERACTIVE_TAGS = new Set(['a', 'button', 'input', 'select', 'textarea']);
+						const TEXT_SELECTOR = 'p, h1, h2, h3, h4, h5, h6, span, a, li, label, button, td, th, caption';
+						function getRepresentativeTextSource(el) {
+							const ownText = ((el instanceof HTMLElement ? el.innerText : el.textContent) || '').trim().replace(/\s+/g, ' ').slice(0, 300);
+							const descendants = Array.from(el.querySelectorAll(TEXT_SELECTOR));
+							for (const child of descendants) {
+								if (child === el) continue;
+								const childRect = child.getBoundingClientRect();
+								if (childRect.width < 2 || childRect.height < 2) continue;
+								if (childRect.bottom < 0 || childRect.top > vH || childRect.right < 0 || childRect.left > vW) continue;
+								const childStyle = window.getComputedStyle(child);
+								if (childStyle.display === 'none' || childStyle.visibility === 'hidden' || childStyle.visibility === 'collapse') continue;
+								if ((parseFloat(childStyle.opacity) || 0) <= 0) continue;
+								const childText = ((child instanceof HTMLElement ? child.innerText : child.textContent) || '').trim().replace(/\s+/g, ' ').slice(0, 300);
+								if (!childText) continue;
+								return { node: child, text: childText };
+							}
+							return ownText ? { node: el, text: ownText } : null;
+						}
 						/** @type {any[]} */
 						const results = [];
 						for (const el of all) {
@@ -1224,20 +1279,25 @@ export async function POST({ request }) {
 							if ((parseFloat(cs.opacity) || 0) <= 0) continue;
 							if (cs.pointerEvents === 'none') continue;
 							const tag = el.tagName.toLowerCase();
+							const isTextTag = TEXT_TAGS.has(tag);
+							const isInteractiveTag = INTERACTIVE_TAGS.has(tag);
+							const textSource = (isTextTag || isInteractiveTag) ? getRepresentativeTextSource(el) : null;
+							const usesChildTextSource = !!textSource && textSource.node !== el;
+							const textStyle = textSource ? window.getComputedStyle(textSource.node) : cs;
 							results.push({
 								tag,
 								rect: { x: Math.round(Math.max(r.left, 0)), y: Math.round(Math.max(r.top, 0)), w: Math.round(Math.min(r.right, vW) - Math.max(r.left, 0)), h: Math.round(Math.min(r.bottom, vH) - Math.max(r.top, 0)) },
-								color: parseColor(cs.color),
+								color: parseColor(textStyle.color),
 								bg: getEffectiveBg(el),
-								fontSize: parseFloat(cs.fontSize) || 14,
-								fontWeight: parseInt(cs.fontWeight) || 400,
-								lineHeight: parseFloat(cs.lineHeight) || 0,
-								fontFamily: (cs.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase(),
-								textAlign: cs.textAlign || 'left',
-								textDecoration: (cs.textDecorationLine && cs.textDecorationLine !== 'none')
-									? cs.textDecorationLine
-									: ((cs.textDecoration || '').includes('underline') ? 'underline' : 'none'),
-								letterSpacing: parseFloat(cs.letterSpacing) || 0,
+								fontSize: parseFloat(textStyle.fontSize) || 14,
+								fontWeight: parseInt(textStyle.fontWeight) || 400,
+								lineHeight: parseFloat(textStyle.lineHeight) || 0,
+								fontFamily: (textStyle.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase(),
+								textAlign: textStyle.textAlign || 'left',
+								textDecoration: (textStyle.textDecorationLine && textStyle.textDecorationLine !== 'none')
+									? textStyle.textDecorationLine
+									: ((textStyle.textDecoration || '').includes('underline') ? 'underline' : 'none'),
+								letterSpacing: parseFloat(textStyle.letterSpacing) || 0,
 								paddingTop: parseFloat(cs.paddingTop) || 0,
 								paddingBottom: parseFloat(cs.paddingBottom) || 0,
 								paddingLeft: parseFloat(cs.paddingLeft) || 0,
@@ -1251,13 +1311,13 @@ export async function POST({ request }) {
 									parseFloat(cs.borderBottomWidth) || 0,
 									parseFloat(cs.borderLeftWidth) || 0
 								),
-								textTransform: cs.textTransform || 'none',
+								textTransform: textStyle.textTransform || 'none',
 								hasBackgroundImage: !!cs.backgroundImage && cs.backgroundImage !== 'none' && cs.backgroundImage.includes('url('),
 								opacity: parseFloat(cs.opacity) || 1,
-								isText: TEXT_TAGS.has(tag),
-								isInteractive: INTERACTIVE_TAGS.has(tag),
-								textContent: (TEXT_TAGS.has(tag) || INTERACTIVE_TAGS.has(tag))
-									? (((el instanceof HTMLElement ? el.innerText : el.textContent) || '').trim().replace(/\s+/g, ' ').slice(0, 300))
+								isText: isTextTag && !!textSource?.text && !usesChildTextSource,
+								isInteractive: isInteractiveTag,
+								textContent: (isTextTag || isInteractiveTag)
+									? (textSource?.text || '')
 									: '',
 								alt: tag === 'img' ? (el.getAttribute('alt') || '').trim() : '',
 								fill: (() => { const f = cs.fill; return (f && f !== 'none' && f !== '') ? parseColor(f) : null; })(),
@@ -1314,6 +1374,24 @@ export async function POST({ request }) {
 						const vH = window.innerHeight;
 						const TEXT_TAGS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span', 'a', 'li', 'label', 'button', 'td', 'th', 'caption']);
 						const INTERACTIVE_TAGS = new Set(['a', 'button', 'input', 'select', 'textarea']);
+						const TEXT_SELECTOR = 'p, h1, h2, h3, h4, h5, h6, span, a, li, label, button, td, th, caption';
+						function getRepresentativeTextSource(el) {
+							const ownText = ((el instanceof HTMLElement ? el.innerText : el.textContent) || '').trim().replace(/\s+/g, ' ').slice(0, 300);
+							const descendants = Array.from(el.querySelectorAll(TEXT_SELECTOR));
+							for (const child of descendants) {
+								if (child === el) continue;
+								const childRect = child.getBoundingClientRect();
+								if (childRect.width < 2 || childRect.height < 2) continue;
+								if (childRect.bottom < 0 || childRect.top > vH || childRect.right < 0 || childRect.left > vW) continue;
+								const childStyle = window.getComputedStyle(child);
+								if (childStyle.display === 'none' || childStyle.visibility === 'hidden' || childStyle.visibility === 'collapse') continue;
+								if ((parseFloat(childStyle.opacity) || 0) <= 0) continue;
+								const childText = ((child instanceof HTMLElement ? child.innerText : child.textContent) || '').trim().replace(/\s+/g, ' ').slice(0, 300);
+								if (!childText) continue;
+								return { node: child, text: childText };
+							}
+							return ownText ? { node: el, text: ownText } : null;
+						}
 						/** @type {any[]} */
 						const results = [];
 						for (const el of all) {
@@ -1327,20 +1405,25 @@ export async function POST({ request }) {
 							if ((parseFloat(cs.opacity) || 0) <= 0) continue;
 							if (cs.pointerEvents === 'none') continue;
 							const tag = el.tagName.toLowerCase();
+							const isTextTag = TEXT_TAGS.has(tag);
+							const isInteractiveTag = INTERACTIVE_TAGS.has(tag);
+							const textSource = (isTextTag || isInteractiveTag) ? getRepresentativeTextSource(el) : null;
+							const usesChildTextSource = !!textSource && textSource.node !== el;
+							const textStyle = textSource ? window.getComputedStyle(textSource.node) : cs;
 							results.push({
 								tag,
 								rect: { x: Math.round(Math.max(r.left, 0)), y: Math.round(Math.max(r.top, 0)), w: Math.round(Math.min(r.right, vW) - Math.max(r.left, 0)), h: Math.round(Math.min(r.bottom, vH) - Math.max(r.top, 0)) },
-								color: parseColor(cs.color),
+								color: parseColor(textStyle.color),
 								bg: getEffectiveBg(el),
-								fontSize: parseFloat(cs.fontSize) || 14,
-								fontWeight: parseInt(cs.fontWeight) || 400,
-								lineHeight: parseFloat(cs.lineHeight) || 0,
-								fontFamily: (cs.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase(),
-								textAlign: cs.textAlign || 'left',
-								textDecoration: (cs.textDecorationLine && cs.textDecorationLine !== 'none')
-									? cs.textDecorationLine
-									: ((cs.textDecoration || '').includes('underline') ? 'underline' : 'none'),
-								letterSpacing: parseFloat(cs.letterSpacing) || 0,
+								fontSize: parseFloat(textStyle.fontSize) || 14,
+								fontWeight: parseInt(textStyle.fontWeight) || 400,
+								lineHeight: parseFloat(textStyle.lineHeight) || 0,
+								fontFamily: (textStyle.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase(),
+								textAlign: textStyle.textAlign || 'left',
+								textDecoration: (textStyle.textDecorationLine && textStyle.textDecorationLine !== 'none')
+									? textStyle.textDecorationLine
+									: ((textStyle.textDecoration || '').includes('underline') ? 'underline' : 'none'),
+								letterSpacing: parseFloat(textStyle.letterSpacing) || 0,
 								paddingTop: parseFloat(cs.paddingTop) || 0,
 								paddingBottom: parseFloat(cs.paddingBottom) || 0,
 								paddingLeft: parseFloat(cs.paddingLeft) || 0,
@@ -1354,13 +1437,13 @@ export async function POST({ request }) {
 									parseFloat(cs.borderBottomWidth) || 0,
 									parseFloat(cs.borderLeftWidth) || 0
 								),
-								textTransform: cs.textTransform || 'none',
+								textTransform: textStyle.textTransform || 'none',
 								hasBackgroundImage: !!cs.backgroundImage && cs.backgroundImage !== 'none' && cs.backgroundImage.includes('url('),
 								opacity: parseFloat(cs.opacity) || 1,
-								isText: TEXT_TAGS.has(tag),
-								isInteractive: INTERACTIVE_TAGS.has(tag),
-								textContent: (TEXT_TAGS.has(tag) || INTERACTIVE_TAGS.has(tag))
-									? (((el instanceof HTMLElement ? el.innerText : el.textContent) || '').trim().replace(/\s+/g, ' ').slice(0, 300))
+								isText: isTextTag && !!textSource?.text && !usesChildTextSource,
+								isInteractive: isInteractiveTag,
+								textContent: (isTextTag || isInteractiveTag)
+									? (textSource?.text || '')
 									: '',
 								alt: tag === 'img' ? (el.getAttribute('alt') || '').trim() : '',
 								fill: (() => { const f = cs.fill; return (f && f !== 'none' && f !== '') ? parseColor(f) : null; })(),
@@ -1372,19 +1455,19 @@ export async function POST({ request }) {
 					const algoAnalysis = analyseAlgorithmically(elements, vpW, vpH);
 					_perf('algorithmic analysis done (algo-ai mode)');
 					send({ type: 'step', step: 4 });
+					const baseFindings = filterFindingsToActiveScope([
+						...algoAnalysis.findings,
+					]);
 					let aiRewrite = null;
 					try {
 						// Screenshot-only mode: rewrite only viewport-derived algorithmic findings.
-						const mergedFindings = filterFindingsToActiveScope([
-							...algoAnalysis.findings,
-						]);
 						const codeContext = {
 							css: cssAnalysis.cssData,
 							html: htmlAnalysis.htmlData,
 							js: jsAnalysis.jsData,
 						};
 						_perf('calling Gemini (algo-ai rewrite)...');
-						aiRewrite = await callGeminiWithFindings(apiKey, mergedFindings, algoAnalysis.overallScore, codeContext, screenshotB64);
+						aiRewrite = await callGeminiWithFindings(apiKey, baseFindings, algoAnalysis.overallScore, codeContext, screenshotB64);
 						_perf('Gemini algo-ai rewrite done');
 					} catch (aiErr) {
 						console.warn('[Percepta] Gemini unavailable, falling back to algorithmic results:', aiErr.message);
@@ -1394,11 +1477,20 @@ export async function POST({ request }) {
 					const allStrengths = [
 						...(aiRewrite?.strengths ?? algoAnalysis.strengths),
 					];
+					let rescuedHighSeverity = [];
 					const displayedFindings = aiRewrite?.findings
-						? filterFindingsToActiveScope(aiRewrite.findings)
-						: filterFindingsToActiveScope([
-							...algoAnalysis.findings,
-						]);
+						? (() => {
+							const aiFindings = filterFindingsToActiveScope(aiRewrite.findings);
+							const aiIds = new Set(aiFindings.map(f => f.id));
+							rescuedHighSeverity = baseFindings.filter(f =>
+								!aiIds.has(f.id) && (f.severity === 'critical' || f.severity === 'warning')
+							);
+							return filterFindingsToActiveScope([
+								...aiFindings,
+								...rescuedHighSeverity,
+							]);
+						})()
+						: baseFindings;
 					const displayedScore = computeOverallScoreFromFindings(displayedFindings);
 
 					const noImages = aiRewrite !== null &&
@@ -1413,6 +1505,8 @@ export async function POST({ request }) {
 							strengths: allStrengths,
 							expertNote: algoAnalysis.expertNote,
 							aiUnavailable: aiRewrite === null,
+							aiGateReport: aiRewrite?.gateReport ?? null,
+							rescuedHighSeverityCount: rescuedHighSeverity.length,
 							noImages,
 						}
 					});
@@ -1444,6 +1538,24 @@ export async function POST({ request }) {
 						const vH = window.innerHeight;
 						const TEXT_TAGS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span', 'a', 'li', 'label', 'button', 'td', 'th', 'caption']);
 						const INTERACTIVE_TAGS = new Set(['a', 'button', 'input', 'select', 'textarea']);
+						const TEXT_SELECTOR = 'p, h1, h2, h3, h4, h5, h6, span, a, li, label, button, td, th, caption';
+						function getRepresentativeTextSource(el) {
+							const ownText = ((el instanceof HTMLElement ? el.innerText : el.textContent) || '').trim().replace(/\s+/g, ' ').slice(0, 300);
+							const descendants = Array.from(el.querySelectorAll(TEXT_SELECTOR));
+							for (const child of descendants) {
+								if (child === el) continue;
+								const childRect = child.getBoundingClientRect();
+								if (childRect.width < 2 || childRect.height < 2) continue;
+								if (childRect.bottom < 0 || childRect.top > vH || childRect.right < 0 || childRect.left > vW) continue;
+								const childStyle = window.getComputedStyle(child);
+								if (childStyle.display === 'none' || childStyle.visibility === 'hidden' || childStyle.visibility === 'collapse') continue;
+								if ((parseFloat(childStyle.opacity) || 0) <= 0) continue;
+								const childText = ((child instanceof HTMLElement ? child.innerText : child.textContent) || '').trim().replace(/\s+/g, ' ').slice(0, 300);
+								if (!childText) continue;
+								return { node: child, text: childText };
+							}
+							return ownText ? { node: el, text: ownText } : null;
+						}
 						/** @type {any[]} */
 						const results = [];
 						for (const el of all) {
@@ -1457,20 +1569,25 @@ export async function POST({ request }) {
 							if ((parseFloat(cs.opacity) || 0) <= 0) continue;
 							if (cs.pointerEvents === 'none') continue;
 							const tag = el.tagName.toLowerCase();
+							const isTextTag = TEXT_TAGS.has(tag);
+							const isInteractiveTag = INTERACTIVE_TAGS.has(tag);
+							const textSource = (isTextTag || isInteractiveTag) ? getRepresentativeTextSource(el) : null;
+							const usesChildTextSource = !!textSource && textSource.node !== el;
+							const textStyle = textSource ? window.getComputedStyle(textSource.node) : cs;
 							results.push({
 								tag,
 								rect: { x: Math.round(Math.max(r.left, 0)), y: Math.round(Math.max(r.top, 0)), w: Math.round(Math.min(r.right, vW) - Math.max(r.left, 0)), h: Math.round(Math.min(r.bottom, vH) - Math.max(r.top, 0)) },
-								color: parseColor(cs.color),
+								color: parseColor(textStyle.color),
 								bg: getEffectiveBg(el),
-								fontSize: parseFloat(cs.fontSize) || 14,
-								fontWeight: parseInt(cs.fontWeight) || 400,
-								lineHeight: parseFloat(cs.lineHeight) || 0,
-								fontFamily: (cs.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase(),
-								textAlign: cs.textAlign || 'left',
-								textDecoration: (cs.textDecorationLine && cs.textDecorationLine !== 'none')
-									? cs.textDecorationLine
-									: ((cs.textDecoration || '').includes('underline') ? 'underline' : 'none'),
-								letterSpacing: parseFloat(cs.letterSpacing) || 0,
+								fontSize: parseFloat(textStyle.fontSize) || 14,
+								fontWeight: parseInt(textStyle.fontWeight) || 400,
+								lineHeight: parseFloat(textStyle.lineHeight) || 0,
+								fontFamily: (textStyle.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase(),
+								textAlign: textStyle.textAlign || 'left',
+								textDecoration: (textStyle.textDecorationLine && textStyle.textDecorationLine !== 'none')
+									? textStyle.textDecorationLine
+									: ((textStyle.textDecoration || '').includes('underline') ? 'underline' : 'none'),
+								letterSpacing: parseFloat(textStyle.letterSpacing) || 0,
 								paddingTop: parseFloat(cs.paddingTop) || 0,
 								paddingBottom: parseFloat(cs.paddingBottom) || 0,
 								paddingLeft: parseFloat(cs.paddingLeft) || 0,
@@ -1484,13 +1601,13 @@ export async function POST({ request }) {
 									parseFloat(cs.borderBottomWidth) || 0,
 									parseFloat(cs.borderLeftWidth) || 0
 								),
-								textTransform: cs.textTransform || 'none',
+								textTransform: textStyle.textTransform || 'none',
 								hasBackgroundImage: !!cs.backgroundImage && cs.backgroundImage !== 'none' && cs.backgroundImage.includes('url('),
 								opacity: parseFloat(cs.opacity) || 1,
-								isText: TEXT_TAGS.has(tag),
-								isInteractive: INTERACTIVE_TAGS.has(tag),
-								textContent: (TEXT_TAGS.has(tag) || INTERACTIVE_TAGS.has(tag))
-									? (((el instanceof HTMLElement ? el.innerText : el.textContent) || '').trim().replace(/\s+/g, ' ').slice(0, 300))
+								isText: isTextTag && !!textSource?.text && !usesChildTextSource,
+								isInteractive: isInteractiveTag,
+								textContent: (isTextTag || isInteractiveTag)
+									? (textSource?.text || '')
 									: '',
 								alt: tag === 'img' ? (el.getAttribute('alt') || '').trim() : '',
 								fill: (() => { const f = cs.fill; return (f && f !== 'none' && f !== '') ? parseColor(f) : null; })(),
@@ -1609,6 +1726,24 @@ export async function POST({ request }) {
 						const vH = window.innerHeight;
 						const TEXT_TAGS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span', 'a', 'li', 'label', 'button', 'td', 'th', 'caption']);
 						const INTERACTIVE_TAGS = new Set(['a', 'button', 'input', 'select', 'textarea']);
+						const TEXT_SELECTOR = 'p, h1, h2, h3, h4, h5, h6, span, a, li, label, button, td, th, caption';
+						function getRepresentativeTextSource(el) {
+							const ownText = ((el instanceof HTMLElement ? el.innerText : el.textContent) || '').trim().replace(/\s+/g, ' ').slice(0, 300);
+							const descendants = Array.from(el.querySelectorAll(TEXT_SELECTOR));
+							for (const child of descendants) {
+								if (child === el) continue;
+								const childRect = child.getBoundingClientRect();
+								if (childRect.width < 2 || childRect.height < 2) continue;
+								if (childRect.bottom < 0 || childRect.top > vH || childRect.right < 0 || childRect.left > vW) continue;
+								const childStyle = window.getComputedStyle(child);
+								if (childStyle.display === 'none' || childStyle.visibility === 'hidden' || childStyle.visibility === 'collapse') continue;
+								if ((parseFloat(childStyle.opacity) || 0) <= 0) continue;
+								const childText = ((child instanceof HTMLElement ? child.innerText : child.textContent) || '').trim().replace(/\s+/g, ' ').slice(0, 300);
+								if (!childText) continue;
+								return { node: child, text: childText };
+							}
+							return ownText ? { node: el, text: ownText } : null;
+						}
 						/** @type {any[]} */
 						const results = [];
 						for (const el of all) {
@@ -1622,20 +1757,25 @@ export async function POST({ request }) {
 							if ((parseFloat(cs.opacity) || 0) <= 0) continue;
 							if (cs.pointerEvents === 'none') continue;
 							const tag = el.tagName.toLowerCase();
+							const isTextTag = TEXT_TAGS.has(tag);
+							const isInteractiveTag = INTERACTIVE_TAGS.has(tag);
+							const textSource = (isTextTag || isInteractiveTag) ? getRepresentativeTextSource(el) : null;
+							const usesChildTextSource = !!textSource && textSource.node !== el;
+							const textStyle = textSource ? window.getComputedStyle(textSource.node) : cs;
 							results.push({
 								tag,
 								rect: { x: Math.round(Math.max(r.left, 0)), y: Math.round(Math.max(r.top, 0)), w: Math.round(Math.min(r.right, vW) - Math.max(r.left, 0)), h: Math.round(Math.min(r.bottom, vH) - Math.max(r.top, 0)) },
-								color: parseColor(cs.color),
+								color: parseColor(textStyle.color),
 								bg: getEffectiveBg(el),
-								fontSize: parseFloat(cs.fontSize) || 14,
-								fontWeight: parseInt(cs.fontWeight) || 400,
-								lineHeight: parseFloat(cs.lineHeight) || 0,
-								fontFamily: (cs.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase(),
-								textAlign: cs.textAlign || 'left',
-								textDecoration: (cs.textDecorationLine && cs.textDecorationLine !== 'none')
-									? cs.textDecorationLine
-									: ((cs.textDecoration || '').includes('underline') ? 'underline' : 'none'),
-								letterSpacing: parseFloat(cs.letterSpacing) || 0,
+								fontSize: parseFloat(textStyle.fontSize) || 14,
+								fontWeight: parseInt(textStyle.fontWeight) || 400,
+								lineHeight: parseFloat(textStyle.lineHeight) || 0,
+								fontFamily: (textStyle.fontFamily || '').split(',')[0].replace(/['"]/g, '').trim().toLowerCase(),
+								textAlign: textStyle.textAlign || 'left',
+								textDecoration: (textStyle.textDecorationLine && textStyle.textDecorationLine !== 'none')
+									? textStyle.textDecorationLine
+									: ((textStyle.textDecoration || '').includes('underline') ? 'underline' : 'none'),
+								letterSpacing: parseFloat(textStyle.letterSpacing) || 0,
 								paddingTop: parseFloat(cs.paddingTop) || 0,
 								paddingBottom: parseFloat(cs.paddingBottom) || 0,
 								paddingLeft: parseFloat(cs.paddingLeft) || 0,
@@ -1649,13 +1789,13 @@ export async function POST({ request }) {
 									parseFloat(cs.borderBottomWidth) || 0,
 									parseFloat(cs.borderLeftWidth) || 0
 								),
-								textTransform: cs.textTransform || 'none',
+								textTransform: textStyle.textTransform || 'none',
 								hasBackgroundImage: !!cs.backgroundImage && cs.backgroundImage !== 'none' && cs.backgroundImage.includes('url('),
 								opacity: parseFloat(cs.opacity) || 1,
-								isText: TEXT_TAGS.has(tag),
-								isInteractive: INTERACTIVE_TAGS.has(tag),
-								textContent: (TEXT_TAGS.has(tag) || INTERACTIVE_TAGS.has(tag))
-									? (((el instanceof HTMLElement ? el.innerText : el.textContent) || '').trim().replace(/\s+/g, ' ').slice(0, 300))
+								isText: isTextTag && !!textSource?.text && !usesChildTextSource,
+								isInteractive: isInteractiveTag,
+								textContent: (isTextTag || isInteractiveTag)
+									? (textSource?.text || '')
 									: '',
 								alt: tag === 'img' ? (el.getAttribute('alt') || '').trim() : '',
 								fill: (() => { const f = cs.fill; return (f && f !== 'none' && f !== '') ? parseColor(f) : null; })(),

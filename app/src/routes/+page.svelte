@@ -365,7 +365,7 @@
 			</svg>
 			<div style="display:flex;align-items:flex-end;gap:5px;">
 				<span style="font-weight:700;font-size:16px;letter-spacing:-0.02em;">Percepta</span>
-				<span style="font-size:11px;font-weight:700;letter-spacing:-0.02em;color:#9ca3af;line-height:1.6;">Beta</span>
+				<span style="font-size:11px;font-weight:700;letter-spacing:-0.02em;color:{theme === 'dark' ? 'var(--text-3)' : '#9ca3af'};line-height:1.6;">Beta</span>
 			</div>
 		</div>
 		<div style="display:flex;align-items:center;gap:12px;">
@@ -388,8 +388,8 @@
 				<!-- Sun icon -->
 				<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{theme === 'light' ? 'var(--text-2)' : 'var(--text-4)'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition:stroke 0.2s;flex-shrink:0;"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
 			</button>
-			<span style="font-size:12px;color:{theme === 'light' ? 'var(--text-2)' : 'var(--text-4)'}">Login</span>
-			<span style="font-size:12px;color:{theme === 'light' ? 'var(--text-2)' : 'var(--text-4)'}">Register</span>
+			<span style="font-size:12px;color:{theme === 'light' ? 'var(--text-2)' : 'var(--text-3)'}">Login</span>
+			<span style="font-size:12px;color:{theme === 'light' ? 'var(--text-2)' : 'var(--text-3)'}">Register</span>
 		</div>
 	</nav>
 
@@ -458,7 +458,7 @@
 					style="padding:10px 12px;border:none;background:{mode === 'algo-ai' ? 'var(--surface)' : 'var(--surface-2)'};text-align:left;transition:background 0.15s;cursor:pointer;"
 				>
 					<p style="font-size:12px;font-weight:600;color:{mode === 'algo-ai' ? 'var(--text)' : 'var(--text-3)'};margin-bottom:2px;">Algorithmic</p>
-					<p style="font-size:11px;color:{mode === 'algo-ai' ? 'var(--text-3)' : 'var(--text-4)'}">Rule-based</p>
+					<p style="font-size:11px;color:{mode === 'algo-ai' ? 'var(--text-3)' : (theme === 'dark' ? 'var(--text-3)' : 'var(--text-4)')}">Rule-based</p>
 				</button>
 				<!-- AI Vision tab — coming soon -->
 				<button
@@ -468,10 +468,10 @@
 					style="padding:10px 12px;border:none;background:var(--surface-2);text-align:left;transition:background 0.15s;cursor:not-allowed;position:relative;opacity:0.9;"
 				>
 					<div style="display:flex;align-items:center;gap:5px;margin-bottom:2px;">
-						<p style="font-size:12px;font-weight:600;color:var(--text-4);margin:0;">AI Vision</p>
+						<p style="font-size:12px;font-weight:600;color:{theme === 'dark' ? 'var(--text-3)' : 'var(--text-4)'};margin:0;">AI Vision</p>
 						<span style="font-size:11px;font-weight:700;letter-spacing:0.06em;background:#fef3c7;color:#92400e;border:1px solid #fde68a;padding:1px 5px;border-radius:4px;text-transform:uppercase;">Soon</span>
 					</div>
-					<p style="font-size:11px;color:var(--text-4);">Screenshot AI</p>
+					<p style="font-size:11px;color:{theme === 'dark' ? 'var(--text-3)' : 'var(--text-4)'};">Screenshot AI</p>
 				</button>
 			</div>
 
@@ -523,7 +523,7 @@
 					<div style="height:3px;border-radius:2px;background:var(--border);overflow:hidden;">
 						<div style="height:100%;width:{pct}%;background:#2563eb;border-radius:2px;transition:width 1.5s ease;"></div>
 					</div>
-					<p style="text-align:center;font-size:12px;color:var(--text-4);margin-top:8px;">{loadSteps[step]}</p>
+					<p style="text-align:center;font-size:12px;color:{theme === 'dark' ? 'var(--text-3)' : 'var(--text-4)'};margin-top:8px;">{loadSteps[step]}</p>
 					{#if elapsed > 40 && (mode === 'algo-ai' || mode === 'ai' || mode === 'compare' || mode === 'compare-algo-ai')}
 						<div style="margin-top:10px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:9px 14px;display:flex;align-items:center;gap:8px;">
 							<svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;"><circle cx="7" cy="7" r="6" stroke="#b45309" stroke-width="1.3"/><path d="M7 4v3.5M7 9.5v.5" stroke="#b45309" stroke-width="1.4" stroke-linecap="round"/></svg>
@@ -535,7 +535,7 @@
 
 			<!-- What gets checked -->
 			<div style="margin-top:48px;">
-				<p style="font-size:11px;font-weight:700;color:var(--text-4);letter-spacing:0.1em;text-transform:uppercase;margin-bottom:20px;text-align:center;">What gets checked</p>
+				<p style="font-size:11px;font-weight:700;color:{theme === 'dark' ? 'var(--text-3)' : 'var(--text-4)'};letter-spacing:0.1em;text-transform:uppercase;margin-bottom:20px;text-align:center;">What gets checked</p>
 				<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
 					{#each [
 						['Readability', 'Text contrast is measured using APCA — the perceptual model behind modern accessibility standards — checked against the actual background colour of each element.'],
@@ -1080,7 +1080,7 @@
 	</main>
 
 	<footer style="text-align:center;padding:20px 24px;border-top:1px solid var(--border-subtle);margin-top:auto;background:var(--surface);position:relative;z-index:2;">
-		<p style="font-size:11px;color:var(--text-4);">Percepta is a non-profit prototype developed as part of a Bachelor's thesis. Not intended for commercial use.</p>
+		<p style="font-size:11px;color:{theme === 'dark' ? 'var(--text-3)' : 'var(--text-4)'};">Percepta is a non-profit prototype developed as part of a Bachelor's thesis. Not intended for commercial use.</p>
 	</footer>
 
 	<!-- ── CI/CD info balloon ─────────────────────────────────────────────── -->

@@ -395,7 +395,19 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
             const lightTextSpan = lightTextEls.length >= 3
                 ? Math.max(...lightTextEls.map(e => e.rect.y + e.rect.h)) - Math.min(...lightTextEls.map(e => e.rect.y))
                 : 0;
-            const isSplitLayout = heavyHasLargeContent && lightTextSpan > vpH * 0.30;
+            const lightTextMass = lightTextEls.reduce((sum, e) => sum + (e.rect.w * e.rect.h), 0);
+            const lightTextChars = lightTextEls.reduce((sum, e) => sum + ((e.textContent || '').trim().length), 0);
+            const lightInteractiveCount = lightHalf.filter(e => e.isInteractive && e.rect.w > 28 && e.rect.h > 20).length;
+            const lightHasMeaningfulTextColumn =
+                (lightTextEls.length >= 3 && lightTextSpan > vpH * 0.22) ||
+                (lightTextEls.length >= 4 && lightTextMass > vpW * vpH * 0.06) ||
+                (lightTextEls.length >= 3 && lightTextChars > 140);
+            const isSplitLayout = heavyHasLargeContent && lightHasMeaningfulTextColumn;
+            const hasTextCounterweight = heavyHasLargeContent && (
+                lightHasMeaningfulTextColumn ||
+                (lightTextEls.length >= 2 && lightTextChars > 90) ||
+                (lightTextEls.length >= 2 && lightInteractiveCount >= 1)
+            );
 
             // Check whether the imbalance originates from nav/header content
             // (logo on one side, links/icons on the other — a common intentional pattern).
@@ -420,16 +432,22 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                 findings.push({
                     id: nid(),
                     category: 'Visual Weight',
-                    severity: isSplitLayout ? 'info' : (lrRatio > 0.55 ? 'warning' : 'info'),
+                    severity: 'info',
                     element: isSplitLayout
-                        ? `Split layout — content block on the ${heavy} side, text column on the ${light}`
-                        : `Noticeably more visual weight on the ${heavy} side`,
+                        ? `Split layout — large visual on the ${heavy}, substantial text column on the ${light}`
+                        : hasTextCounterweight
+                            ? `Large visual on the ${heavy}, but the ${light} side provides text counterweight`
+                        : `Large visual on the ${heavy} side may make the page feel slightly unbalanced`,
                     issue: isSplitLayout
-                        ? `The ${heavy} side carries a large content block while the ${light} side has a text column. This is a common and effective split-screen composition — a text column spread vertically creates perceptual counterweight even when raw area weight differs. Worth checking visually that neither side feels dominant enough to steal focus from the main message.`
-                        : `The ${heavy} side holds significantly more visual weight than the ${light}. This could be intentional (split-screen, sidebar) or an accidental imbalance. Check that it feels deliberate rather than unplanned.`,
+                        ? `The ${heavy} side carries the stronger visual object, but the ${light} side also has a substantial text column that provides real perceptual counterweight. This is a common and often effective split-screen composition, so the raw left-right weight difference may look more balanced in practice than the metric alone suggests. Worth a quick visual check, not an automatic correction.`
+                        : hasTextCounterweight
+                            ? `The ${heavy} side still carries the stronger visual object, but the ${light} side is not empty — it has enough text and/or calls to action to provide some real counterweight. This means the measured imbalance may read as mostly intentional in practice, especially in hero sections that pair illustration with explanatory copy.`
+                        : `There is a large visual on the ${heavy} side, which can make the page feel heavier on that side. This does not automatically mean the layout is wrong — a strong text block, supporting icons, or a clear button on the ${light} side can balance it out perceptually. Treat this as a visual review prompt, not an automatic defect.`,
                     recommendation: isSplitLayout
-                        ? `No fix needed if this is intentional. If one side feels too dominant, try increasing whitespace around the lighter column or reducing the content block's visual contrast.`
-                        : `If the imbalance is planned, no fix needed. If it surprised you, check whether a large dark container or image on the ${heavy} side can be lightened or resized without breaking the design intent.`,
+                        ? `No fix needed if the composition already feels balanced. Only adjust it if the heavy side pulls focus too aggressively — for example by slightly reducing image contrast or giving the text column a bit more space or typographic emphasis.`
+                        : hasTextCounterweight
+                            ? `No fix needed if the layout already feels balanced to the eye. Only intervene if the heavier side overwhelms the message — for example by toning down the visual slightly or giving the text column a touch more typographic emphasis.`
+                        : `Make sure the opposite side has enough balancing weight — for example a stronger text block, supporting icons, or a clearly visible button. If the visual still dominates too much, tone it down slightly or strengthen the content on the ${light} side.`,
                     boundingBox: heavy === 'left' ? [0, 0, 1000, 500] : [0, 500, 1000, 1000],
                 });
             }
