@@ -147,7 +147,6 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                 severity: 'warning',
                 noImages: true,
                 element: `Page has very little content — ${mainTextChars} characters of visible text and ${mainInteractive} interactive element${mainInteractive !== 1 ? 's' : ''} in the main area`,
-                bookImages: [],
                 issue: `This page contains almost no visible content: only ${mainTextChars} characters of text and ${mainInteractive} interactive element${mainInteractive !== 1 ? 's' : ''} outside the nav and footer. Near-empty pages pass most perceptual checks by default — not because the design is strong, but because there is too little to assess. Users landing on a sparse page with no navigation, minimal copy, and a single action have no visual signals to orient themselves or understand the page's purpose before acting.`,
                 recommendation: 'If this is an intentional splash, login gateway, or coming-soon page: add a brief description of what the user is expected to do, ensure the primary action has clear visual weight (solid filled button, not a ghost), and include a branded heading. If this is a full-content page, consider whether users have enough context — explanatory copy, visual hierarchy, and navigation — to understand where they are and what to do next.',
                 boundingBox: [0, 0, 1000, 1000],
@@ -188,10 +187,10 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                 findings.push({
                     id: nid(),
                     category: 'Readability',
-                    severity: bodyFailRatio > 0.30 || worst.lc < 18 ? 'critical' : 'warning',
-                    element: `${bodyFailing.length} text area${bodyFailing.length !== 1 ? 's' : ''} that are hard to read due to low contrast between text and background (worst: ${zone})`,
-                    issue: `${bodyFailing.length} text area${bodyFailing.length !== 1 ? 's' : ''} do not have enough contrast between the text colour and its background. The worst case is in the ${zone}. Smaller text needs more contrast than larger text — the smaller the letters, the darker they need to be against their background.`,
-                    recommendation: `Darken the text or lighten the background in the ${zone} area, and apply the same fix to any other areas flagged. A simple check: can you read it comfortably at a glance without squinting?`,
+                    severity: bodyFailRatio > 0.50 || worst.lc < 10 ? 'critical' : 'warning',
+                       element: `${bodyFailing.length} text area${bodyFailing.length !== 1 ? 's' : ''} that are hard to read due to low contrast between text and background (worst: ${elQ(worst.el) || zone})`,
+                       issue: `${bodyFailing.length} text area${bodyFailing.length !== 1 ? 's' : ''} do not have enough contrast between the text colour and its background. The worst case is ${elQ(worst.el) ? `the text ${elQ(worst.el)}, in the ${zone}` : `in the ${zone}`}. Smaller text needs more contrast than larger text — the smaller the letters, the darker they need to be against their background.`,
+                       recommendation: `Darken the text or lighten the background${elQ(worst.el) ? ` around ${elQ(worst.el)}` : ` in the ${zone} area`}, and apply the same fix to any other areas flagged. A simple check: can you read it comfortably at a glance without squinting?`,
                     boundingBox: toBBox(worst.el.rect, vpW, vpH),
                 });
                 contrastFindingPushed = true;
@@ -206,8 +205,8 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                 id: nid(),
                 category: 'Readability',
                 severity: interactiveFailing.length > 3 || worst.lc < 30 ? 'warning' : 'info',
-                element: `${interactiveFailing.length} button${interactiveFailing.length !== 1 ? 's' : ''} or link${interactiveFailing.length !== 1 ? 's' : ''} with text that is hard to read against their background (worst: ${zone})`,
-                issue: `${interactiveFailing.length} button${interactiveFailing.length !== 1 ? 's' : ''} or link${interactiveFailing.length !== 1 ? 's' : ''} do not have enough contrast between their label text and their background colour. This matters most for interactive elements — users need to read them clearly to decide what to do next.`,
+                   element: `${interactiveFailing.length} button${interactiveFailing.length !== 1 ? 's' : ''} or link${interactiveFailing.length !== 1 ? 's' : ''} with text that is hard to read against their background (worst: ${elQ(worst.el) || zone})`,
+                   issue: `${interactiveFailing.length} button${interactiveFailing.length !== 1 ? 's' : ''} or link${interactiveFailing.length !== 1 ? 's' : ''} do not have enough contrast between their label text and their background colour${elQ(worst.el) ? ` — the worst offender is ${elQ(worst.el)} in the ${zone}` : ` — the worst case is in the ${zone}`}. This matters most for interactive elements — users need to read them clearly to decide what to do next.`,
                 recommendation: 'Make sure button and link labels are clearly readable against their own background — not just the page background. A coloured button still needs its label to stand out from that button colour.',
                 boundingBox: toBBox(worst.el.rect, vpW, vpH),
             });
@@ -348,24 +347,20 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
         const comX = wTotal > 0 ? wx / wTotal : vpW / 2;
         const comY = wTotal > 0 ? wy / wTotal : vpH / 2;
         const dxN = (comX - vpW / 2) / vpW;
-        const dyN = (comY - vpH / 2) / vpH;
-        const offsetMag = Math.sqrt(dxN * dxN + dyN * dyN);
         // Pre-compute lr ratio so we can avoid duplicating the same message below.
         const lrTotal = leftW + rightW;
         const lrRatio = lrTotal > 0 ? Math.abs(leftW - rightW) / lrTotal : 0;
-        // Only emit the center-of-mass finding when the imbalance is primarily vertical
-        // OR when the left-right ratio check won't fire for the same issue.
-        const offsetPrimarilyHorizontal = Math.abs(dxN) > Math.abs(dyN) * 0.7;
-        if (offsetMag > 0.10 && !(offsetPrimarilyHorizontal && lrRatio > 0.30)) {
-            const parts = [];
-            if (Math.abs(dxN) > 0.06) parts.push(dxN > 0 ? 'right' : 'left');
-            if (Math.abs(dyN) > 0.06) parts.push(dyN > 0 ? 'downward' : 'upward');
+
+        // Left-right only: do not emit vertical (upward/downward) balance findings.
+        const horizontalOffset = Math.abs(dxN);
+        if (horizontalOffset > 0.10 && lrRatio <= 0.30) {
+            const side = dxN > 0 ? 'right' : 'left';
             findings.push({
                 id: nid(),
                 category: 'Visual Weight',
-                severity: offsetMag > 0.20 ? 'warning' : 'info',
-                element: `Visual weight sits toward the ${parts.join(' and ')}`,
-                issue: `The heavier elements (darker blocks, large images, dense text) are concentrated toward the ${parts.join(' and ')} of the page. This is sometimes a deliberate design choice (split layouts, dark sidebars, hero images) and can look great. Worth checking it feels intentional rather than accidental.`,
+                severity: horizontalOffset > 0.20 ? 'warning' : 'info',
+                element: `Visual weight sits toward the ${side}`,
+                issue: `The heavier elements (darker blocks, large images, dense text) are concentrated toward the ${side} side of the page. This is sometimes a deliberate design choice (split layouts, dark sidebars, hero images) and can look great. Worth checking it feels intentional rather than accidental.`,
                 recommendation: 'If this asymmetry is intentional, no action needed — it can create strong visual interest. If it feels unplanned, consider whether the heavier side is drawing attention away from your most important content.',
                 boundingBox: [
                     Math.max(0, Math.round((comY / vpH - 0.08) * 1000)),
@@ -490,8 +485,8 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                             category: 'Visual Weight',
                             severity: 'info',
                             element: `Large ${elemDesc} on the ${side} — carries ~${Math.round(fraction * 100)}% of the hero-area visual weight`,
-                            issue: `A prominent ${elemDesc} positioned toward the ${side} side of the page accounts for roughly ${Math.round(fraction * 100)}% of the visible weight in the hero area. Because nothing of comparable weight anchors the ${otherSide} side, it creates a gravitational pull that can draw the eye toward the ${side} before visitors have absorbed the content on the ${otherSide}. This is often a deliberate product-image or illustration layout — the question is whether it feels intentional and whether the primary message on the ${otherSide} still gets seen.`,
-                            recommendation: `If this is a planned hero layout (product photo, illustration, branded graphic), it can look great. To ensure the ${otherSide} side is not overshadowed: add a high-contrast CTA button or bold headline on the ${otherSide} to provide perceptual counterweight. Even a single strongly-styled primary button can anchor the lighter side and make the layout feel deliberate rather than unbalanced.`,
+                            issue: `A prominent ${elemDesc} on the ${side} side of the hero area carries roughly ${Math.round(fraction * 100)}% of the visible weight in that zone. The ${otherSide} side may have content of its own, but the raw weight difference means the eye can be pulled toward the ${side} first. This is often a deliberate split-screen or product-image layout — the key question is whether it feels intentional, and whether the primary message still gets noticed.`,
+                            recommendation: `If this is a planned hero layout (product photo, illustration, branded graphic), it can work well. Review it visually: does the ${otherSide} side feel anchored, or does the page feel like it leans ${side}? A high-contrast headline or a clearly styled CTA on the ${otherSide} can reinforce balance and make the composition feel deliberate rather than accidental.`,
                             bookImages: [
                                 { src: 'image277.jpg', caption: `A bold CTA on the ${otherSide} provides perceptual counterweight to a heavy ${elemDesc} on the ${side}.` },
                                 { src: 'image281.jpg', caption: 'A large image or block on one side creates visual tension — worth verifying this is intentional.' },
@@ -506,7 +501,8 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
     }
 
     // ── CHECK 2b — Top/Bottom Balance and Quadrant Distribution ───────────────
-    {
+    // Disabled for now: user requested Visual Weight to evaluate left↔right only.
+    if (false) {
         // Top vs bottom weight — measures the vertical axis analogue of left/right balance.
         // Uses proportional area splitting: an element that spans the midline contributes
         // weight to each half in proportion to how much of its area falls there.
@@ -666,39 +662,11 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                 }
             }
 
-            // Sub-check D: focal point location analysis
-            // Per F-pattern and Z-pattern research, the upper half (preferably upper-left
-            // or upper-centre) is the strongest entry position for a focal element.
-            if (competing <= 6) {
-                const focal = scored[0].e;
-                const focalX = focal.rect.x + focal.rect.w / 2;
-                const focalY = focal.rect.y + focal.rect.h / 2;
-                const xRatio = focalX / vpW;
-                const yRatio = focalY / vpH;
-                if (yRatio > 0.62) {
-                    findings.push({
-                        id: nid(),
-                        category: 'Visual Hierarchy',
-                        severity: 'info',
-                        element: 'Primary focal point is in the lower portion of the visible page',
-                        issue: `The most visually dominant element sits ${Math.round(yRatio * 100)}% down the viewport. Users form their first impression within the visible area before scrolling — content in the lower half is statistically less likely to be seen on first load. When the dominant visual anchor is near the bottom, the page entry hierarchy is effectively inverted: the eye lands first on lesser content and may never reach the primary.`,
-                        recommendation: 'Move the most important element — your headline, CTA, or hero image — to above the midpoint of the first viewport. If the current layout constraints prevent this, consider restructuring to lead with value before scrolling is required.',
-                        boundingBox: toBBox(focal.rect, vpW, vpH),
-                    });
-                } else if (xRatio > 0.72 && yRatio >= 0.15) {
-                    findings.push({
-                        id: nid(),
-                        category: 'Visual Hierarchy',
-                        severity: 'info',
-                        element: 'Primary focal point is toward the far right side of the layout',
-                        issue: `The dominant element is positioned in the rightmost zone of the page (${Math.round(xRatio * 100)}% from the left). In left-to-right reading cultures, the eye enters from the upper-left. A dominant element on the far right takes advantage of the eye's rightward sweep but is missed by visitors who scan and disengage before completing the sweep.`,
-                        recommendation: 'If the right-dominant positioning is intentional (e.g. right-side CTA paired with left-side body text), add a strong left-side entry point — a headline or subheading — that leads the eye toward the right. If unintentional, shifting the dominant element leftward increases its first-glance prominence.',
-                        boundingBox: toBBox(focal.rect, vpW, vpH),
-                    });
-                } else if (yRatio < 0.40 && xRatio >= 0.10 && xRatio <= 0.75) {
-                    strengths.push('The primary focal point sits in the upper portion of the layout — well-positioned in the F-pattern entry zone where eyes naturally land first.');
-                }
-            }
+            // Sub-check D: focal point location analysis — DISABLED
+            // Not part of the agreed 3 Visual Hierarchy issues (oversized headings,
+            // same-weight buttons, links look like text). Produces false positives
+            // on legitimate hero layouts.
+            /* if (competing <= 6) { ... } */
         }
     }
 
@@ -770,22 +738,35 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
             }
         }
 
-        // Sub-check C: check whether key semantic layers actually use different bands
+        // Sub-check C: measure text-vs-own-background separation per element.
+        // Using global median text luminance vs global median background luminance can
+        // misfire on mixed dark/light UIs (e.g. dark hero + light input fields).
+        // What matters for readability is each text element against its own background.
         if (populated >= 3) {
-            const bgLumaVals = vis.filter(e => e.rect.w > vpW * 0.3).map(e => luma(e.bg[0], e.bg[1], e.bg[2]));
-            const textLumaVals = textEls.map(e => luma(e.color[0], e.color[1], e.color[2]));
-            if (bgLumaVals.length >= 5 && textLumaVals.length >= 5) {
-                const medianBg = bgLumaVals.sort((a, b) => a - b)[Math.floor(bgLumaVals.length / 2)];
-                const medianText = textLumaVals.sort((a, b) => a - b)[Math.floor(textLumaVals.length / 2)];
-                const separation = Math.abs(medianBg - medianText);
-                if (separation < 0.12) {
+            const textBgDeltas = textEls
+                .filter(e => (e.textContent || '').trim().length >= 2 || e.isInteractive)
+                .map(e => {
+                    const txtL = luma(e.color[0], e.color[1], e.color[2]);
+                    const bgL = luma(e.bg[0], e.bg[1], e.bg[2]);
+                    return Math.abs(txtL - bgL);
+                })
+                .filter(v => Number.isFinite(v));
+
+            if (textBgDeltas.length >= 8) {
+                const sorted = textBgDeltas.slice().sort((a, b) => a - b);
+                const medianDelta = sorted[Math.floor(sorted.length / 2)];
+                const q1Delta = sorted[Math.floor(sorted.length * 0.25)];
+                const lowCount = textBgDeltas.filter(v => v < 0.14).length;
+                const lowRatio = lowCount / textBgDeltas.length;
+
+                if (medianDelta < 0.18 && q1Delta < 0.12 && lowRatio > 0.35) {
                     findings.push({
                         id: nid(),
                         category: 'Colour Palette',
                         severity: 'warning',
-                        element: `Text and background are almost the same brightness (only ${Math.round(separation * 100)}% difference)`,
-                        issue: `Text and background colours are only ${Math.round(separation * 100)} percentage points apart in brightness on the median element. Even if the page uses a range of shades elsewhere, the most important contrast — text on its background — is too weak, which makes reading noticeably harder.`,
-                        recommendation: 'Make the text noticeably darker (or lighter) than its background. The basic rule: light background → very dark text, dark background → very light text. There should be a clear, obvious brightness difference between the two.',
+                        element: `Many text/background pairs are too close in brightness (median gap: ${Math.round(medianDelta * 100)}%, lower quartile: ${Math.round(q1Delta * 100)}%)`,
+                        issue: `Across visible text elements, the brightness gap between text and its own background is weak: median ${Math.round(medianDelta * 100)}%, and the dimmest quarter sits around ${Math.round(q1Delta * 100)}%. This means a substantial share of text does not stand out enough from what it sits on, which makes reading feel effortful.`,
+                        recommendation: 'Increase brightness separation where text looks muted against its own surface. Keep a clear polarity per component: dark surface -> light text, light surface -> dark text. Prioritise body text, nav labels, and secondary metadata first.',
                         boundingBox: [0, 0, 1000, 1000],
                     });
                 }
@@ -902,8 +883,8 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                 id: nid(),
                 category: 'Colour Palette',
                 severity: 'info',
-                element: `Minimal colour usage — only ${Math.round(chromaticRatio * 100)}% of palette values are chromatic`,
-                issue: 'The design uses very little colour. This can read as refined or functional, but risks making interactive elements blend into the grey palette. Users scanning quickly may not immediately spot buttons or links.',
+                element: `Minimal rendered colour — only ${Math.round(chromaticRatio * 100)}% of on-screen elements use a chromatic colour`,
+                issue: 'Looking at what is actually painted on screen (not what is declared in CSS), almost all visible areas are neutral — greys, whites, and blacks. Even if the stylesheet defines many color values for hover states or components not on this page, the rendered page itself lacks chromatic colour. This risks making interactive elements like buttons and links blend into the neutral palette, leaving users unsure what they can click.',
                 recommendation: 'Check that all interactive elements (buttons, links, form controls) are clearly distinguishable from their surroundings without relying on hover states. A small, consistent accent colour for interactive elements goes a long way.',
                 boundingBox: [0, 0, 1000, 1000],
             });
@@ -1071,11 +1052,9 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                 }
             }
 
-            // Sub-check D: heading colour as hierarchy signal
-            // Headings that share the exact same colour as body text miss a hierarchy dimension.
-            // Even a subtle shift darker or toward the brand colour helps.
-            // Only fires if Sub-check C (flat contrast tier range) did NOT already fire —
-            // both diagnose the same root cause: colour is not differentiating text tiers.
+            // Sub-check D: heading vs body — no colour AND no weight differentiation
+            // Only fires when headings are indistinguishable from body in BOTH dimensions.
+            // If either colour or weight already creates separation, there's enough hierarchy.
             {
                 const headingEls = textEls.filter(e => ['h1', 'h2', 'h3'].includes(e.tag));
                 const bodyEls = textEls.filter(e => ['p', 'li'].includes(e.tag) && e.fontSize >= 13 && e.fontSize <= 20);
@@ -1084,21 +1063,28 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                         const ls = arr.map(e => luma(e.color[0], e.color[1], e.color[2])).sort((a, b) => a - b);
                         return ls[Math.floor(ls.length / 2)];
                     };
+                    const medianWeightArr = (arr) => {
+                        const ws = arr.map(e => e.fontWeight).filter(w => w > 0).sort((a, b) => a - b);
+                        if (ws.length === 0) return null;
+                        return ws[Math.floor(ws.length / 2)];
+                    };
                     const headingLuma = medianLumaArr(headingEls);
                     const bodyLuma = medianLumaArr(bodyEls);
                     const lumaDiff = Math.abs(headingLuma - bodyLuma);
-                    if (lumaDiff < 0.05) {
+                    const headingWeight = medianWeightArr(headingEls);
+                    const bodyWeight = medianWeightArr(bodyEls);
+                    const weightDiff = headingWeight !== null && bodyWeight !== null ? Math.abs(headingWeight - bodyWeight) : 999;
+                    // Fire only when BOTH colour and weight fail to differentiate headings from body
+                    if (lumaDiff < 0.05 && weightDiff < 100) {
                         findings.push({
                             id: nid(),
                             category: 'Visual Hierarchy',
                             severity: 'info',
-                            element: 'Headings and body text share the same colour brightness — a missed hierarchy dimension',
-                            issue: `Heading elements (h1–h3) and body text have almost identical text colour brightness (difference: ${Math.round(lumaDiff * 100)}%). Colour is an additional hierarchy axis: headings can be slightly darker (or use a brand colour) to signal higher importance, while captions and labels can be lighter. Without colour differentiation, the entire hierarchy depends on size and weight alone, which becomes harder to perceive at smaller size differences.`,
-                            recommendation: 'Set headings to your darkest (or most branded) text colour (e.g. #111 or a brand dark), body text to a mid value (e.g. #333), and secondary labels/captions to a softer tone (e.g. #6b7280). This three-tier colour hierarchy works alongside size and weight to make importance scannable at a glance.',
+                            element: 'Headings and body text share the same colour and weight — no visual differentiation between levels',
+                            issue: `Heading elements (h1–h3) and body text have nearly identical colour brightness (difference: ${Math.round(lumaDiff * 100)}%) and nearly identical font weight (difference: ${weightDiff} units). When neither colour nor weight distinguishes headings from body, the hierarchy depends entirely on font size — which is a weak signal on its own, especially at smaller size differences. Readers cannot quickly scan and identify what is a heading versus content.`,
+                            recommendation: `Pick one dimension to create separation — you do not need both. Either: (1) make headings bolder (e.g. weight 600–700) while keeping body at 400, or (2) shift heading colour slightly darker or to a brand colour while keeping body text a softer tone. Even a single clear axis of differentiation (weight or colour) is enough for strong hierarchy.`,
                             boundingBox: [0, 0, 1000, 1000],
                         });
-                    } else if (lumaDiff >= 0.12) {
-                        strengths.push('Heading and body text use distinct colour tones — colour reinforces the typographic hierarchy alongside size and weight.');
                     }
                 }
             }
@@ -1217,7 +1203,8 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
     }
 
     // ── CHECK 8 — Edge Margin Breathing Room ───────────────────────────────────
-    {
+    // Disabled for now: outside current agreed issue scope.
+    if (false) {
         const minMargin = Math.min(vpW, vpH) * 0.035;
         const candidates = vis.filter(e => {
             if (e.rect.w >= vpW * 0.92 || e.rect.h >= vpH * 0.92) return false;
@@ -1287,7 +1274,8 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
     }
 
     // ── CHECK 10 — Simultaneous Contrast ──────────────────────────────────────
-    {
+    // Disabled for now: outside current agreed issue scope.
+    if (false) {
         let vibEdges = 0, chromaEdges = 0;
         let highSatCount = 0, totalSatChecked = 0;
         const clashZones = [];
@@ -1362,7 +1350,8 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
     }
 
     // ── CHECK 11 — Grid Alignment Signal ──────────────────────────────────────
-    {
+    // Disabled for now: outside current agreed issue scope.
+    if (false) {
         const alignCandidates = vis.filter(e => e.rect.w < vpW * 0.85 && e.rect.w > 20);
         const leftEdges = alignCandidates.map(e => Math.round(e.rect.x / 8) * 8);
         const rightEdges = alignCandidates.map(e => Math.round((e.rect.x + e.rect.w) / 8) * 8);
@@ -1521,7 +1510,8 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
     }
 
     // ── CHECK 12 — Colour Temperature Consistency ─────────────────────────────
-    {
+    // Disabled for now: outside current agreed issue scope.
+    if (false) {
         let shSin = 0, shCos = 0, shN = 0, hiSin = 0, hiCos = 0, hiN = 0;
         let warmCount = 0, coolCount = 0, neutralCount = 0;
         for (const el of vis) {
@@ -1699,8 +1689,8 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                 id: nid(),
                 category: 'Typography',
                 severity: tooWide.length >= warningCount ? 'warning' : 'info',
-                element: `${tooWide.length} text block${tooWide.length !== 1 ? 's' : ''} wider than a comfortable reading width`,
-                issue: `${tooWide.length} text area${tooWide.length !== 1 ? 's' : ''} appear to have lines longer than about 75 characters. Long lines make it hard for the eye to track back from the end of one line to the start of the next, which slows reading and can cause the eye to land on the wrong line.`,
+                   element: `${tooWide.length} text block${tooWide.length !== 1 ? 's' : ''} wider than a comfortable reading width${(() => { const lbl = elQ(worst); return lbl ? ` — widest: ${lbl}` : ''; })()}`,
+                   issue: `${tooWide.length} text area${tooWide.length !== 1 ? 's' : ''} appear to have lines longer than about 75 characters${(() => { const lbl = elQ(worst); return lbl ? `, including ${lbl}` : ''; })()}. Long lines make it hard for the eye to track back from the end of one line to the start of the next, which slows reading and can cause the eye to land on the wrong line.`,
                 recommendation: 'Try constraining paragraph and body text to a max-width of around 60 to 70 characters wide. In CSS this is typically somewhere between 55ch and 75ch. Headings can stay wider.',
                 boundingBox: toBBox(worst.rect, vpW, vpH),
             });
@@ -1806,15 +1796,18 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
             ? largeBgEls.reduce((s, e) => s + luma(e.bg[0], e.bg[1], e.bg[2]), 0) / largeBgEls.length
             : 0.95;
 
-        // Ghost button check: button background nearly same luminance as page background
-        const buttons = vis.filter(e => e.tag === 'button' && e.rect.w > 30 && e.rect.h > 20);
+        // Ghost button check: button background nearly same luminance as page background.
+        // Only consider buttons with visible text labels — icon-only buttons (search, avatar,
+        // hamburger) intentionally have transparent backgrounds and should not be counted.
+        const buttons = vis.filter(e => e.tag === 'button' && e.rect.w > 30 && e.rect.h > 20
+            && (e.textContent || '').trim().length >= 2);
         const ghostButtons = buttons.filter(e => Math.abs(luma(e.bg[0], e.bg[1], e.bg[2]) - pgBgL) < 0.08);
         const ghostRatio = buttons.length > 0 ? ghostButtons.length / buttons.length : 0;
-        if (ghostButtons.length > 0 && (ghostRatio === 1 || (ghostRatio > 0.60 && buttons.length >= 2))) {
+        if (ghostButtons.length > 0 && ghostRatio === 1 && buttons.length >= 3) {
             findings.push({
                 id: nid(),
                 category: 'Visual Hierarchy',
-                severity: ghostRatio > 0.80 ? 'warning' : 'info',
+                severity: 'info',
                 element: `${ghostButtons.length} of ${buttons.length} button${buttons.length !== 1 ? 's' : ''} have no visible fill (ghost buttons)`,
                 issue: `${ghostButtons.length} button${ghostButtons.length !== 1 ? 's' : ''} blend into the page background rather than standing out as interactive elements. Ghost buttons rely on users already knowing where to click and are much harder to recognise as actionable, especially on mobile or for first-time visitors.`,
                 recommendation: 'Give primary buttons a solid background that clearly separates them from the page. Ghost buttons (border-only style) are acceptable for secondary actions alongside a solid primary, but should not be the dominant button style.',
@@ -1844,7 +1837,7 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                 findings.push({
                     id: nid(),
                     category: 'Visual Hierarchy',
-                    severity: hasUnderlineFallback ? 'info' : 'warning',
+                    severity: 'info',
                     element: hasUnderlineFallback
                         ? 'Links rely solely on underline to differ from body text — no colour distinction'
                         : 'Links are indistinguishable from body text — same colour and no underline',
@@ -1907,8 +1900,14 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                     const band = Math.floor(e.rect.y / (vpH / 4));
                     yBuckets[band] = (yBuckets[band] || 0) + 1;
                 });
-                const maxInBand = Math.max(...Object.values(yBuckets));
-                if (maxInBand >= 5) {
+                const maxBand = Object.keys(yBuckets).reduce((a, b) => yBuckets[a] > yBuckets[b] ? a : b);
+                const maxInBand = yBuckets[maxBand];
+                // Suppress if all clustered buttons are within the top nav strip
+                // (nav bars legitimately stack multiple buttons in the header)
+                const navStripH = Math.min(120, vpH * 0.15);
+                const bandEls = ctaEls.filter(e => Math.floor(e.rect.y / (vpH / 4)) === Number(maxBand));
+                const allInNavStrip = bandEls.every(e => e.rect.y + e.rect.h <= navStripH);
+                if (maxInBand >= 5 && !allInNavStrip) {
                     findings.push({
                         id: nid(),
                         category: 'Visual Hierarchy',
@@ -2105,9 +2104,10 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
     }
 
     // ── CHECK 17 — Font Family Proliferation ──────────────────────────────────
+    // Disabled for now: outside current agreed issue scope.
     // More than 2–3 typefaces on one page introduces competing rhythms and weakens
     // typographic cohesion. Each font family carries its own personality.
-    {
+    if (false) {
         const GENERIC_FAMILIES = new Set([
             'serif', 'sans-serif', 'monospace', 'cursive', 'fantasy',
             'system-ui', 'ui-sans-serif', 'ui-serif', 'ui-monospace', 'ui-rounded',
@@ -2174,12 +2174,16 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                         const a = sortedIA[i], b = sortedIA[j];
                         const hGap = Math.max(0, Math.max(a.rect.x, b.rect.x) - Math.min(a.rect.x + a.rect.w, b.rect.x + b.rect.w));
                         const vGap = Math.max(0, Math.max(a.rect.y, b.rect.y) - Math.min(a.rect.y + a.rect.h, b.rect.y + b.rect.h));
-                        // When elements fully overlap horizontally (hGap=0), the meaningful
-                        // separation is vertical (e.g. full-width stacked form fields).
-                        // Math.min(0, vGap) would always return 0 — a false zero-gap reading.
-                        const gap = (hGap === 0 && vGap > 0) ? vGap
-                                  : (vGap === 0 && hGap > 0) ? hGap
-                                  : Math.min(hGap, vGap);
+                        // Only compare elements that are in the same horizontal row —
+                        // i.e. their vertical centres are close enough that they appear
+                        // side-by-side. Elements stacked above/below each other are never
+                        // accidentally tapped together, so skip them entirely.
+                        const aCenterY = a.rect.y + a.rect.h / 2;
+                        const bCenterY = b.rect.y + b.rect.h / 2;
+                        const rowTolerance = Math.min(a.rect.h, b.rect.h) * 0.6;
+                        if (Math.abs(aCenterY - bCenterY) > rowTolerance) continue;
+                        // Gap between same-row elements is purely horizontal.
+                        const gap = hGap;
                         if (gap >= 8 || gap < 0) continue;
                         // Exclude inline navigation text-link pairs — two <a> tags in the same
                         // horizontal row with visible text labels are an intentional nav-strip
@@ -2206,6 +2210,25 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                             Math.abs((a.rect.y + a.rect.h / 2) - (b.rect.y + b.rect.h / 2)) < Math.min(a.rect.h, b.rect.h) * 0.4 &&
                             hGap <= 2;
                         if (sameButtonSegment) continue;
+                        // Exclude adjacent form controls (select, input) in the same row —
+                        // filter bars and inline forms intentionally place these side-by-side.
+                        const sameFormControlRow = (a.tag === 'select' || a.tag === 'input') &&
+                            (b.tag === 'select' || b.tag === 'input' || b.tag === 'button') &&
+                            Math.abs((a.rect.y + a.rect.h / 2) - (b.rect.y + b.rect.h / 2)) < Math.min(a.rect.h, b.rect.h) * 0.6;
+                        if (sameFormControlRow) continue;
+                        // Exclude top navigation text items (a/button with visible labels)
+                        // in the header strip. Desktop nav bars commonly place items flush
+                        // without gaps; this is intentional and not a tap-separation hazard.
+                        const navStripH = Math.min(120, vpH * 0.15);
+                        const topNavTextItems =
+                            (a.rect.y + a.rect.h <= navStripH) &&
+                            (b.rect.y + b.rect.h <= navStripH) &&
+                            (a.tag === 'a' || a.tag === 'button') &&
+                            (b.tag === 'a' || b.tag === 'button') &&
+                            (a.textContent || '').trim().length >= 2 &&
+                            (b.textContent || '').trim().length >= 2 &&
+                            a.rect.h <= 40 && b.rect.h <= 40;
+                        if (topNavTextItems) continue;
                         tooClose.push({ a, b, gap });
                     }
                 }
@@ -2269,9 +2292,10 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
     }
 
     // ── CHECK 19 — Heading Document Hierarchy ─────────────────────────────────
+    // Disabled for now: outside current agreed issue scope.
     // Every page should have exactly one H1 as the primary visual anchor.
     // Missing H1: no clear entry point. Multiple H1s: competing anchors.
-    {
+    if (false) {
         const allH1s = vis.filter(e => e.tag === 'h1');
         const allHeadings = vis.filter(e => ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(e.tag));
         if (textEls.length >= 5) {
@@ -2372,11 +2396,12 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
     }
 
     // ── CHECK 20 — Heading Proximity (Section Spacing) ────────────────────────
+    // Disabled for now: outside current agreed issue scope.
     // Source: negative_space.txt / hiarachy.txt
     // "Use less white space between headings and body text to establish a
     //  relationship between the two. Separate new sections with more white
     //  space to create more distinction."
-    {
+    if (false) {
         const PROXIMITY_HEADING_TAGS = new Set(['h1', 'h2', 'h3', 'h4']);
         const sortedByY = [...vis].sort((a, b) => a.rect.y - b.rect.y);
         const detachedHeadings = [];
@@ -2425,9 +2450,10 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
     }
 
     // ── CHECK 21 — Excessive Heading Levels ───────────────────────────────────
+    // Disabled for now: outside current agreed issue scope.
     // Source: hiarachy.txt — "more than 3–4 levels of hierarchy becomes very
     // difficult to follow"
-    {
+    if (false) {
         const ALL_HEADING_TAGS = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'];
         const activeLevels = ALL_HEADING_TAGS.filter(tag =>
             vis.some(e => e.tag === tag && e.rect.w > 30)
@@ -2448,10 +2474,11 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
     }
 
     // ── CHECK 22 — Elevation Consistency (Z-Index vs Shadow) ──────────────────
+    // Disabled for now: outside current agreed issue scope.
     // Shadows simulate physical elevation in UI. When a page uses both z-index
     // and box-shadow as elevation signals, they should agree: a higher stacking
     // layer should cast a proportionally larger, softer shadow.
-    {
+    if (false) {
         // Parse the largest blur radius from a CSS box-shadow string.
         // Handles multiple comma-separated shadows, color tokens, and 'inset'.
         function parseShadowBlur(shadow) {
@@ -2608,12 +2635,13 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
     }
 
     // ── CHECK 23 — Border Overuse ─────────────────────────────────────────────
+    // Disabled for now: outside current agreed issue scope.
     // Source: Refactoring UI — "Don't use a border when a box shadow will do"
     // Borders are the most rigid separation tool available. When they appear on
     // more than ~40% of elements they create a heavily caged look. Backgrounds
     // tints and shadows are softer alternatives that communicate depth instead of
     // just separation.
-    {
+    if (false) {
         const borderedEls = vis.filter(e => (e.borderWidth ?? 0) > 0);
         const borderRatio = vis.length > 0 ? borderedEls.length / vis.length : 0;
         if (borderRatio > 0.40 && borderedEls.length >= 8) {
@@ -2634,13 +2662,14 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
     }
 
     // ── CHECK 24 — Containment Paradox ───────────────────────────────────────
+    // Disabled for now: outside current agreed issue scope.
     // Source: Refactoring UI — spacing should reinforce containment
     // Within a component the outer padding (the gap from the container edge to its
     // content) should be larger than the inner gaps between the items inside it.
     // When inner gaps exceed outer padding, the items feel visually "loose" inside
     // the box — as if about to spill out — because there is more breathing room
     // between siblings than between siblings and their parent.
-    {
+    if (false) {
         // Look for "card-like" containers: padded on all four sides, component-sized
         const cardContainers = vis.filter(e =>
             !e.isText &&
@@ -2722,6 +2751,7 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
     }
 
     // ── CHECK 25 — Tiny Text Near or On Images ────────────────────────────────
+    // Disabled for now: outside current agreed issue scope.
     // Text that is very small (< 11px) and sits directly on or immediately adjacent
     // to an image or background-image element is nearly always unreadable. This is
     // distinct from the contrast check: even perfect-contrast 9px text is illegible
@@ -2748,7 +2778,7 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                 category: 'Readability',
                 severity: tinyNearImage.length >= 4 ? 'critical' : 'warning',
                 element: `${tinyNearImage.length} text element${tinyNearImage.length !== 1 ? 's' : ''} under 11px appear near images (smallest: ${worst.fontSize.toFixed(0)}px)`,
-                issue: `${tinyNearImage.length} text elements smaller than 11px are placed on or directly next to images or graphic backgrounds. Text this small is essentially unreadable at any normal screen distance — it appears as a visual blur rather than readable content. When placed near complex images, even the shape of letters becomes indistinct.`,
+                issue: `${tinyNearImage.length} text elements smaller than 11px are placed over or directly next to photos, images, or graphic backgrounds. Text this small is essentially unreadable at any normal screen distance — it appears as a visual blur rather than readable content. When placed near complex images, even the shape of letters becomes indistinct.`,
                 recommendation: 'Set a minimum font size of 12–14px for any text that appears near or overlaid on images. If the text is a caption or label, display it below the image on a plain background instead of over the graphic. If it is decorative and not meant to be read, remove it or replace it with a purely visual element.',
                 boundingBox: toBBox(worst.rect, vpW, vpH),
             });
@@ -2797,15 +2827,46 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                 boundingBox: toBBox(worst.rect, vpW, vpH),
             });
         }
+
+        // Sub-check B: oversized icons — square img elements rendered at 40+px.
+        // Icons are designed for 16–24px; scaling them to 40+px makes them look
+        // chunky and disproportionate. The fix is the icon-in-container pattern.
+        {
+            const ICON_WORDS = /\b(icon|glyph|symbol|arrow|chevron|check|cross|star|heart|menu|burger|search|close|edit|delete|add|plus|minus|info|warning|logo|badge|seal)\b/i;
+            const oversizedIconImgs = imgEls.filter(e => {
+                const w = e.rect.w, h = e.rect.h;
+                const aspectRatio = w > 0 && h > 0 ? w / h : 0;
+                const isSquarish = aspectRatio >= 0.6 && aspectRatio <= 1.7;
+                const isIconRange = Math.min(w, h) >= 40 && Math.max(w, h) <= 130;
+                const hasIconAlt = ICON_WORDS.test(e.alt || '');
+                return isSquarish && isIconRange && hasIconAlt;
+            });
+            if (oversizedIconImgs.length >= 3) {
+                oversizedIconImgs.sort((a, b) => Math.max(b.rect.w, b.rect.h) - Math.max(a.rect.w, a.rect.h));
+                const worst = oversizedIconImgs[0];
+                const worstSize = Math.round(Math.max(worst.rect.w, worst.rect.h));
+                const zone = zoneDesc(worst.rect.x + worst.rect.w / 2, worst.rect.y + worst.rect.h / 2, vpW, vpH);
+                findings.push({
+                    id: nid(),
+                    category: 'Icon & Image Size',
+                    severity: oversizedIconImgs.length >= 6 ? 'warning' : 'info',
+                    element: `${oversizedIconImgs.length} icon${oversizedIconImgs.length !== 1 ? 's' : ''} scaled to 40+px — oversized for typical icon usage (largest: ${worstSize}px, ${zone})`,
+                    issue: `${oversizedIconImgs.length} icon${oversizedIconImgs.length !== 1 ? 's' : ''} are rendered at 40+px or larger. Icons are designed to be sharp and legible at 16–24px; scaling them up to 40+px makes them look chunky and disproportionately heavy compared to surrounding text and other UI elements. Bitmap icons also degrade in quality at larger render sizes.`,
+                    recommendation: 'Keep the icon at its native small size (16–24px) and place it inside a larger coloured container instead — this is the "icon-in-container" pattern. The container provides the visual footprint and weight while the icon itself stays sharp and proportional. This scales to any size without distorting the icon.',
+                    boundingBox: toBBox(worst.rect, vpW, vpH),
+                });
+            }
+        }
     }
 
     // ── CHECK 29 — Horizontal Row Spacing Outlier (Nav / Toolbar) ────────────
+    // Disabled for now: outside current agreed issue scope.
     // In a horizontal navigation row, all inter-item gaps should be roughly the
     // same order of magnitude. A single gap that is many times larger than the
     // median signals visual disconnection — viewers read the items on each side
     // as separate groups even if they are semantically related (e.g. nav links
     // and a CTA button that are visually split by an implicit flex spacer).
-    {
+    if (false) {
         const topRowEls = vis.filter(e =>
             e.rect.y + e.rect.h / 2 < vpH * 0.15 &&
             e.rect.h < 80 &&
@@ -2861,12 +2922,13 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
     }
 
     // ── CHECK 30 — Content Group Separation ───────────────────────────────────
+    // Disabled for now: outside current agreed issue scope.
     // Within a content column, elements of clearly different semantic weight
     // (heading, body text, interactive control, caption) need a visible breath
     // between them to register as separate "groups." When mixed-scale elements
     // share < 8px of vertical gap, the eye cannot parse content hierarchy at a
     // glance and all content reads as a single undifferentiated block.
-    {
+    if (false) {
         const colEls = vis.filter(e =>
             (e.isText || e.isInteractive) &&
             e.rect.w >= 56 && e.rect.h >= 12 &&
@@ -2915,12 +2977,13 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
     }
 
     // ── CHECK 31 — Layout Column Alignment ────────────────────────────────────
+    // Disabled for now: outside current agreed issue scope.
     // In a hero or content column, elements that share the same left edge should
     // also have consistent widths — a heading, paragraph, and button group are
     // implicitly treated as a unified block. When their widths diverge by more
     // than ~30% it breaks the implied column grid, so the eye detects the ragged
     // right edge as disorder rather than intentional asymmetry.
-    {
+    if (false) {
         const navStripBottom = vpH * 0.14; // ignore top-nav/header region
         // Find elements with the same (or very similar) left edge
         const colCandidates = vis.filter(e =>
@@ -2973,12 +3036,8 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
     }
 
     // ── CHECK 27 — Visual Center of Mass: Coloured Top Banner ─────────────────
-    // A full-width coloured bar positioned at the very top of the page creates a
-    // strong perceptual anchor. High-saturation colours carry disproportionate
-    // visual weight relative to neutral areas; a wide coloured strip above the
-    // hero shifts the page's perceptual centre of mass upward and competes with
-    // the intended primary focal point below.
-    {
+    // Disabled for now: user requested Visual Weight to evaluate left↔right only.
+    if (false) {
         const topBars = vis.filter(e => {
             if (e.isText) return false;
             if (e.rect.y > 80) return false;               // must start near page top
@@ -3113,10 +3172,10 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
 
     // ── Score + return ─────────────────────────────────────────────────────────
     const penalty = findings.reduce(
-        (acc, f) => acc + (f.severity === 'critical' ? 15 : f.severity === 'warning' ? 7 : 2), 0
+        (acc, f) => acc + (f.severity === 'critical' ? 12 : f.severity === 'warning' ? 7 : 2), 0
     );
     // Cap penalty so the minimum score stays meaningful (not zero for busy pages)
-    const overallScore = Math.max(20, Math.min(100, 100 - Math.min(penalty, 70)));
+    const overallScore = Math.max(20, Math.min(95, 95 - Math.min(penalty, 70)));
 
     if (strengths.length === 0) {
         strengths.push('The overall layout looks balanced and well-structured.');

@@ -41,6 +41,12 @@ Use the provided design knowledge excerpts to write better, more specific recomm
 
 Keep every other field exactly as provided: id, category, severity, element, boundingBox. The only new field you should add to each finding is "bookImages".
 
+Precision rules for text-based findings:
+- If the original finding mentions a quoted text snippet (for example 'Enter your email'), keep that exact quote in the rewritten issue.
+- Do not replace a concrete quoted snippet with vague wording like "one text area" or "a text block".
+- Keep location cues when present (for example top-right, middle-left).
+- If both are available, prefer: quoted text + location.
+
 Also generate:
 - "summary": 1-2 sentence plain-language overall impression based on the findings
 - "strengths": 2-4 short, genuine compliments about what appears to be working well (infer from the severity and spread of findings — if no critical issues exist in a category, that area is doing well)

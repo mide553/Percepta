@@ -1,4 +1,4 @@
-import { error } from '@sveltejs/kit';
+﻿import { error } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { SYSTEM_PROMPT, ALGO_AI_PROMPT } from '$lib/ai/prompt.js';
 import { BOOK_KNOWLEDGE } from '$lib/ai/bookKnowledge.js';
@@ -10,6 +10,91 @@ import { extractAndAnalyzeHTML } from '$lib/analysis/html.js';
 import { extractAndAnalyzeJS } from '$lib/analysis/js.js';
 
 const VP_W = 1440;
+const MAX_FINDINGS_PER_CATEGORY = 3;
+
+/**
+ * Strict allowlist of image examples to reduce false positives.
+ * Only checks that map to these desc-driven images remain active.
+ *
+ * @type {Record<string, Set<string>>}
+ */
+const ALLOWED_IMAGE_SRCS_BY_CATEGORY = {
+	'Readability': new Set([
+		'image183.jpg',
+		'image185.jpg',
+		'image122.jpg',
+		'image124.jpg',
+		'image225.png',
+	]),
+	'Visual Weight': new Set([
+		'image54.png',
+		'image55.png',
+		'image277.jpg',
+		'image281.jpg',
+		'image282.jpg',
+	]),
+	'Visual Hierarchy': new Set([
+		'image51.png',
+		'image52.png',
+		'image53.png',
+		'image58.png',
+		'image59.png',
+		'image127.png',
+		'image128.png',
+		'image129.png',
+		'image251.jpeg',
+	]),
+	'Typography': new Set([
+		'image14.jpg',
+		'image23.jpeg',
+		'image102.png',
+		'image112.jpg',
+		'image141.jpg',
+		'image132.jpg',
+		'image133.jpg',
+	]),
+	'Colour Palette': new Set([
+		'image37.png',
+		'image41.png',
+		'image151.jpeg',
+		'image153.png',
+		'image183.jpg',
+		'image180.png',
+		'image181.png',
+	]),
+	'Spacing & Layout': new Set([
+		'image63.jpeg',
+		'image65.jpeg',
+		'image72.png',
+		'image102.png',
+		'image105.png',
+	]),
+	'Interactive Targets': new Set([
+		'image58.png',
+		'image59.png',
+		'image94.png',
+		'image95.png',
+		'image205.png',
+		'image251.jpeg',
+	]),
+	'Icon & Image Size': new Set([
+		'image225.png',
+		'image227.png',
+		'image230.png',
+		'image233.jpg',
+		'image242.png',
+	]),
+};
+
+/**
+ * @param {string} category
+ * @param {string} src
+ */
+function isAllowedImageForCategory(category, src) {
+	const allowed = ALLOWED_IMAGE_SRCS_BY_CATEGORY[category];
+	if (!allowed) return false;
+	return allowed.has(src);
+}
 
 /**
  * Strip internal AI-instruction sentences from a bookImage desc so it reads
@@ -225,6 +310,10 @@ function checkImageConditionAgainstFinding(imageDesc, findingText, findingCatego
 		{ pattern: /\d\+.*same background.*section/i, keywords: ['section', 'background', 'panel'] },
 		// Split layout (left-right column balance only � NOT for top-bar or vertical imbalance)
 		{ pattern: /split layout|left-right column|left-right.*imbalance/i, keywords: ['split', 'two column', 'left-right', 'column', 'split-screen'] },
+		// Centered text alignment (image132, image133)
+		{ pattern: /longer than two or three lines|elements.*more than.*lines.*center|if you want them to be more subtle/i, keywords: ['center', 'centred', 'centered', 'alignment', 'align'] },
+		// Warm/cool grey temperature (image180, image181)
+		{ pattern: /natural gray/i, keywords: ['gray', 'grey', 'desaturated', 'neutral', 'cool', 'warm', 'temperature', 'hue'] },
 	];
 
 	// Check if we can verify the condition
@@ -275,12 +364,135 @@ function isTextOverImageFinding(finding) {
 	return /over image areas|placed over image|patterned-background areas|text element.*over image|text over a photo/.test(text);
 }
 
+/**
+ * Strictly keep only the issue families agreed for the current calibration phase.
+ * This removes "first checks win" behavior by eliminating unrelated findings
+ * before image selection and per-category capping.
+ * @param {{ category?: string, id?: string, issue?: string, recommendation?: string, element?: string, noImages?: boolean }} finding
+ */
+function isFindingInActiveScope(finding) {
+	if (!finding || typeof finding !== 'object') return false;
+	const category = finding.category || '';
+	const text = `${finding.id || ''} ${finding.issue || ''} ${finding.recommendation || ''} ${finding.element || ''}`.toLowerCase();
+	const hasAny = (arr) => arr.some(k => text.includes(k));
+	const isSparsePage = hasAny(['very little content', 'almost no visible content', 'near-empty pages', 'splash', 'coming-soon'])
+		&& hasAny(['characters', 'interactive element', 'main area']);
+
+	// Allow the sparse-page diagnostic even when it is intentionally image-free.
+	if (finding.noImages) return category === 'Visual Hierarchy' && isSparsePage;
+
+	if (category === 'Readability') {
+		const lowContrast = hasAny(['contrast', 'apca', 'hard to read', 'unreadable']) && hasAny(['text', 'button', 'link', 'background']);
+		const tightLeading = hasAny(['line-height', 'line height', 'tight line spacing', 'spaced too tightly']);
+		const textOnImage = hasAny(['text over image', 'text over photo', 'placed over image', 'overlay', 'scrim', 'photo']);
+		return lowContrast || tightLeading || textOnImage;
+	}
+
+	if (category === 'Visual Weight') {
+		const leftRightImbalance = hasAny(['left', 'right']) && hasAny(['imbalance', 'split', 'counterweight', 'column']);
+		const iconVsText = hasAny(['icon']) && hasAny(['text', 'heavy', 'weight']);
+		const dominantHero = hasAny(['dominant', 'hero', 'counterweight', 'gravitational pull']);
+		return leftRightImbalance || iconVsText || dominantHero;
+	}
+
+	if (category === 'Visual Hierarchy') {
+		const sparsePage = isSparsePage;
+		const oversizedHeadings = hasAny(['heading']) && hasAny(['oversized', 'too big', 'outweigh', 'visual weight']);
+		const equalButtonWeight = hasAny(['button']) && hasAny(['same', 'equal', 'primary', 'secondary', 'tertiary', 'weight']);
+		const linksBlendIn = hasAny(['link']) && hasAny(['indistinguishable', 'unstyled', 'blend', 'underline', 'same color', 'same colour']);
+		return sparsePage || oversizedHeadings || equalButtonWeight || linksBlendIn;
+	}
+
+	if (category === 'Typography') {
+		const typeScale = hasAny(['type scale', 'font size', 'typographic hierarchy', 'arbitrary']);
+		const longLineLength = hasAny(['line length', 'characters', 'too wide', '90', '110']);
+		const allCapsSpacing = hasAny(['all-caps', 'uppercase']) && hasAny(['letter-spacing', 'spacing']);
+		return typeScale || longLineLength || allCapsSpacing;
+	}
+
+	if (category === 'Colour Palette') {
+		const fewGreys = hasAny(['grey', 'gray']) && hasAny(['few', '1-2', 'three', '9-shade', 'scale']);
+		const grayOnColor = hasAny(['grey', 'gray']) && hasAny(['colored background', 'coloured background', 'tinted', 'card']);
+		const limitedPalette = hasAny(['limited', 'minimal', 'few colors', 'few colours', 'palette', 'only']) && hasAny(['color', 'colour', 'grey', 'gray']);
+		return fewGreys || grayOnColor || limitedPalette;
+	}
+
+	if (category === 'Spacing & Layout') {
+		const crampedInternal = hasAny(['cramped', 'compressed', 'too close', 'less than 8 pixels', 'tight spacing', 'padding']);
+		const overstretchedRows = hasAny(['full-width', 'stretched', 'spread out', 'too wide', 'line lengths uncomfortable']);
+		const spacingScale = hasAny(['spacing scale', 'different spacing values', 'inconsistent spacing', 'random spacing']);
+		return crampedInternal || overstretchedRows || spacingScale;
+	}
+
+	if (category === 'Interactive Targets') {
+		const tooSmall = hasAny(['too small', 'touch target', 'minimum size', '32x32', '31x19']);
+		const notDifferentiated = hasAny(['primary', 'secondary', 'tertiary', 'same weight', 'equal-weight', 'button styles']);
+		const tooClose = hasAny(['too close', 'no space', 'accidental taps', 'wrong item']);
+		return tooSmall || notDifferentiated || tooClose;
+	}
+
+	if (category === 'Icon & Image Size') {
+		const oversizedIcons = hasAny(['icon']) && hasAny(['40+px', 'oversized', 'too large', 'scaled']);
+		const mixedAspect = hasAny(['aspect ratio', 'variable-height', 'card grid', 'grid alignment']);
+		const textOverImage = hasAny(['text']) && hasAny(['image', 'photo', 'overlay']);
+		return oversizedIcons || mixedAspect || textOverImage;
+	}
+
+	return false;
+}
+
+/**
+ * @param {Array<any>} findings
+ */
+function filterFindingsToActiveScope(findings) {
+	return (findings || []).filter(isFindingInActiveScope);
+}
+
+/** @param {string} s */
+function firstQuotedText(s) {
+	if (typeof s !== 'string') return null;
+	const m = s.match(/'[^']{2,120}'/);
+	return m ? m[0] : null;
+}
+
+/** @param {string} s */
+function firstZoneLabel(s) {
+	if (typeof s !== 'string') return null;
+	const m = s.match(/\b(top|middle|bottom)-(left|centre|right)\b/i);
+	return m ? m[0].toLowerCase() : null;
+}
+
+/**
+ * Make sure rewritten prose still names the concrete text snippet that triggered the finding.
+ * This avoids vague messages like "one text area" with no anchor.
+ * @param {any} rewritten
+ * @param {any} original
+ */
+function preserveQuotedReference(rewritten, original) {
+	if (!rewritten || !original) return rewritten;
+	const source = `${original.issue || ''} ${original.element || ''}`;
+	const quote = firstQuotedText(source);
+	if (!quote) return rewritten;
+
+	const issue = typeof rewritten.issue === 'string' ? rewritten.issue : '';
+	const element = typeof rewritten.element === 'string' ? rewritten.element : '';
+	if (issue.includes(quote) || element.includes(quote)) return rewritten;
+
+	const zone = firstZoneLabel(source);
+	const suffix = zone
+		? ` The affected text is ${quote} in the ${zone}.`
+		: ` The affected text is ${quote}.`;
+	return { ...rewritten, issue: `${issue.trim()}${suffix}`.trim() };
+}
+
 async function callGeminiWithFindings(apiKey, findings, overallScore, codeContext = null) {
+	const scopedFindings = filterFindingsToActiveScope(findings);
+	const sourceById = new Map(scopedFindings.map(f => [f.id, f]));
 	const spacingScaleFindingIds = new Set(
-		findings.filter(isSpacingScaleVarianceFinding).map(f => f.id)
+		scopedFindings.filter(isSpacingScaleVarianceFinding).map(f => f.id)
 	);
 
-	const categoriesPresent = [...new Set(findings.map(f => f.category))];
+	const categoriesPresent = [...new Set(scopedFindings.map(f => f.category))];
 	const bookKnowledgeContext = Object.fromEntries(
 		categoriesPresent
 			.filter(cat => BOOK_KNOWLEDGE[cat])
@@ -351,12 +563,13 @@ For each selected image, return an object with:
   src     � the exact filename
   caption � a 1-2 sentence direct statement about what this image demonstrates in context of this finding. Start with the action or observation directly (e.g. "A small high-contrast button can counterbalance a much larger photo in a split layout."). Do NOT start with "This image shows", "This shows", or any meta-phrase. Do NOT copy the desc verbatim.`;
 
-	const findingsWithImages = findings.map(f => {
+	const findingsWithImages = scopedFindings.map(f => {
 		if (f.noImages) return { ...f, availableImages: [] };
 		const isSpacingScaleVariance = isSpacingScaleVarianceFinding(f);
 		const isTextOverImage = isTextOverImageFinding(f);
 		const available = BOOK_IMAGES
 			.filter(img => img.tags.includes(f.category))
+			.filter(img => isAllowedImageForCategory(f.category, img.src))
 			// Deterministic routing for spacing image pair selection.
 			.filter(img => {
 				if (isTextOverImage) return img.src === 'image225.png' || img.src === 'image227.png' || img.src === 'image230.png';
@@ -381,7 +594,29 @@ For each selected image, return an object with:
 		return { ...f, availableImages: available };
 	});
 
-	const bodyPayload = JSON.stringify({ overallScore, findings: findingsWithImages, bookKnowledge: bookKnowledgeContext });
+	// Keep only findings backed by at least one allowed, desc-matching image,
+	// and cap each category to reduce noise.
+	const categoryCount = new Map();
+	const gatedFindingsWithImages = [];
+	for (const f of findingsWithImages) {
+		if (f.noImages) {
+			const prevNoImages = categoryCount.get(f.category) || 0;
+			if (prevNoImages >= MAX_FINDINGS_PER_CATEGORY) continue;
+			categoryCount.set(f.category, prevNoImages + 1);
+			gatedFindingsWithImages.push(f);
+			continue;
+		}
+		const availableCount = Array.isArray(f.availableImages) ? f.availableImages.length : 0;
+		if (availableCount === 0) continue;
+		const prev = categoryCount.get(f.category) || 0;
+		if (prev >= MAX_FINDINGS_PER_CATEGORY) continue;
+		categoryCount.set(f.category, prev + 1);
+		gatedFindingsWithImages.push(f);
+	}
+
+	console.log(`[Percepta] findings gated: ${findings.length} -> ${gatedFindingsWithImages.length} (max ${MAX_FINDINGS_PER_CATEGORY}/category)`);
+
+	const bodyPayload = JSON.stringify({ overallScore, findings: gatedFindingsWithImages, bookKnowledge: bookKnowledgeContext });
 	const body = JSON.stringify({
 		system_instruction: { parts: [{ text: systemInstruction }] },
 		contents: [{
@@ -407,7 +642,7 @@ For each selected image, return an object with:
 				await new Promise(r => setTimeout(r, 4000 * Math.pow(3, attempt - 1)));
 			}
 			const _attemptT = Date.now();
-			console.log(`[Percepta:perf] callGeminiWithFindings(${modelId}) attempt ${attempt + 1}/3 � sending request (${findings.length} findings)...`);
+			console.log(`[Percepta:perf] callGeminiWithFindings(${modelId}) attempt ${attempt + 1}/3 � sending request (${gatedFindingsWithImages.length} findings)...`);
 			const response = await fetch(url, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -423,6 +658,7 @@ For each selected image, return an object with:
 				const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
 				const result = JSON.parse(cleaned);
 				if (Array.isArray(result.findings)) {
+					result.findings = result.findings.map(f => preserveQuotedReference(f, sourceById.get(f.id)));
 					// First pass: resolve & validate images per finding
 					result.findings = result.findings.map(f => {
 						const rawImages = Array.isArray(f.bookImages) ? f.bookImages : [];
@@ -713,6 +949,11 @@ export async function POST({ request }) {
 							if (r.width < 2 || r.height < 2) continue;
 							if (r.bottom < 0 || r.top > vH || r.right < 0 || r.left > vW) continue;
 							const cs = window.getComputedStyle(el);
+							// Ignore elements users cannot see or interact with. This prevents
+							// hidden nav mega-menu items from inflating touch-target counts.
+							if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse') continue;
+							if ((parseFloat(cs.opacity) || 0) <= 0) continue;
+							if (cs.pointerEvents === 'none') continue;
 							const tag = el.tagName.toLowerCase();
 							results.push({
 								tag,
@@ -759,27 +1000,13 @@ export async function POST({ request }) {
 					const analysis = analyseAlgorithmically(elements, vpW, vpH);
 					_perf('algorithmic analysis done (algo mode)');
 
-					// Merge all analysis findings and strengths
-					const allFindings = [
-						...analysis.findings,
-						...cssAnalysis.findings,
-						...htmlAnalysis.findings,
-						...jsAnalysis.findings,
-					];
-					const allStrengths = [
-						...analysis.strengths,
-						...cssAnalysis.strengths,
-						...htmlAnalysis.strengths,
-						...jsAnalysis.strengths,
-					];
-
 					send({ type: 'step', step: 7 });
 					send({
 						type: 'done', result: {
 							screenshot: screenshotDataUrl,
 							...analysis,
-							findings: allFindings,
-							strengths: allStrengths,
+							findings: analysis.findings,
+							strengths: analysis.strengths,
 						}
 					});
 				} else if (mode === 'algo-ai') {
@@ -825,6 +1052,11 @@ export async function POST({ request }) {
 							if (r.width < 2 || r.height < 2) continue;
 							if (r.bottom < 0 || r.top > vH || r.right < 0 || r.left > vW) continue;
 							const cs = window.getComputedStyle(el);
+							// Ignore elements users cannot see or interact with. This prevents
+							// hidden nav mega-menu items from inflating touch-target counts.
+							if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse') continue;
+							if ((parseFloat(cs.opacity) || 0) <= 0) continue;
+							if (cs.pointerEvents === 'none') continue;
 							const tag = el.tagName.toLowerCase();
 							results.push({
 								tag,
@@ -873,13 +1105,10 @@ export async function POST({ request }) {
 					send({ type: 'step', step: 4 });
 					let aiRewrite = null;
 					try {
-						// Merge algorithmic findings with CSS/HTML/JS findings before AI rewrite
-						const mergedFindings = [
+						// Screenshot-only mode: rewrite only viewport-derived algorithmic findings.
+						const mergedFindings = filterFindingsToActiveScope([
 							...algoAnalysis.findings,
-							...cssAnalysis.findings,
-							...htmlAnalysis.findings,
-							...jsAnalysis.findings,
-						];
+						]);
 						const codeContext = {
 							css: cssAnalysis.cssData,
 							html: htmlAnalysis.htmlData,
@@ -895,9 +1124,6 @@ export async function POST({ request }) {
 					send({ type: 'step', step: 6 });
 					const allStrengths = [
 						...(aiRewrite?.strengths ?? algoAnalysis.strengths),
-						...cssAnalysis.strengths,
-						...htmlAnalysis.strengths,
-						...jsAnalysis.strengths,
 					];
 
 					const noImages = aiRewrite !== null &&
@@ -908,12 +1134,9 @@ export async function POST({ request }) {
 							screenshot: screenshotDataUrl,
 							overallScore: algoAnalysis.overallScore,
 							summary: aiRewrite?.summary ?? algoAnalysis.summary,
-							findings: aiRewrite?.findings ?? [
+							findings: aiRewrite?.findings ? filterFindingsToActiveScope(aiRewrite.findings) : filterFindingsToActiveScope([
 								...algoAnalysis.findings,
-								...cssAnalysis.findings,
-								...htmlAnalysis.findings,
-								...jsAnalysis.findings,
-							],
+							]),
 							strengths: allStrengths,
 							expertNote: algoAnalysis.expertNote,
 							aiUnavailable: aiRewrite === null,
@@ -955,6 +1178,11 @@ export async function POST({ request }) {
 							if (r.width < 2 || r.height < 2) continue;
 							if (r.bottom < 0 || r.top > vH || r.right < 0 || r.left > vW) continue;
 							const cs = window.getComputedStyle(el);
+							// Ignore elements users cannot see or interact with. This prevents
+							// hidden nav mega-menu items from inflating touch-target counts.
+							if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse') continue;
+							if ((parseFloat(cs.opacity) || 0) <= 0) continue;
+							if (cs.pointerEvents === 'none') continue;
 							const tag = el.tagName.toLowerCase();
 							results.push({
 								tag,
@@ -1003,13 +1231,10 @@ export async function POST({ request }) {
 					send({ type: 'step', step: 4 });
 					let aiRewrite = null;
 					try {
-						// Merge algorithmic findings with CSS/HTML/JS findings before AI rewrite
-						const mergedFindings = [
+						// Screenshot-only mode: rewrite only viewport-derived algorithmic findings.
+						const mergedFindings = filterFindingsToActiveScope([
 							...algoResult.findings,
-							...cssAnalysis.findings,
-							...htmlAnalysis.findings,
-							...jsAnalysis.findings,
-						];
+						]);
 						const codeContext = {
 							css: cssAnalysis.cssData,
 							html: htmlAnalysis.htmlData,
@@ -1023,20 +1248,14 @@ export async function POST({ request }) {
 					}
 
 					send({ type: 'step', step: 6 });
-					// Merge algo findings with CSS/HTML/JS findings for the "algo" side
+					// Screenshot-only mode: keep only viewport-derived algorithmic findings.
 					const algoWithExtensions = {
 						...algoResult,
-						findings: [
+						findings: filterFindingsToActiveScope([
 							...algoResult.findings,
-							...cssAnalysis.findings,
-							...htmlAnalysis.findings,
-							...jsAnalysis.findings,
-						],
+						]),
 						strengths: [
 							...algoResult.strengths,
-							...cssAnalysis.strengths,
-							...htmlAnalysis.strengths,
-							...jsAnalysis.strengths,
 						],
 					};
 
@@ -1051,7 +1270,7 @@ export async function POST({ request }) {
 							algo: algoWithExtensions,
 							algoAi: {
 								summary: aiRewrite?.summary ?? algoResult.summary,
-								findings: aiRewrite?.findings ?? algoWithExtensions.findings,
+								findings: aiRewrite?.findings ? filterFindingsToActiveScope(aiRewrite.findings) : algoWithExtensions.findings,
 								strengths: aiRewrite?.strengths ?? algoWithExtensions.strengths,
 							},
 							aiUnavailable: aiRewrite === null,
@@ -1073,18 +1292,11 @@ export async function POST({ request }) {
 						type: 'done', result: {
 							screenshot: screenshotDataUrl,
 							...result,
-							// Add CSS/HTML/JS findings to AI results
-							findings: [
+							findings: filterFindingsToActiveScope([
 								...(result.findings || []),
-								...cssAnalysis.findings,
-								...htmlAnalysis.findings,
-								...jsAnalysis.findings,
-							],
+							]),
 							strengths: [
 								...(result.strengths || []),
-								...cssAnalysis.strengths,
-								...htmlAnalysis.strengths,
-								...jsAnalysis.strengths,
 							],
 						}
 					});
@@ -1131,6 +1343,11 @@ export async function POST({ request }) {
 							if (r.width < 2 || r.height < 2) continue;
 							if (r.bottom < 0 || r.top > vH || r.right < 0 || r.left > vW) continue;
 							const cs = window.getComputedStyle(el);
+							// Ignore elements users cannot see or interact with. This prevents
+							// hidden nav mega-menu items from inflating touch-target counts.
+							if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse') continue;
+							if ((parseFloat(cs.opacity) || 0) <= 0) continue;
+							if (cs.pointerEvents === 'none') continue;
 							const tag = el.tagName.toLowerCase();
 							results.push({
 								tag,
@@ -1187,37 +1404,24 @@ export async function POST({ request }) {
 					_perf('Gemini compare AI analysis done');
 					send({ type: 'step', step: 6 });
 
-					// Merge algo findings with CSS/HTML/JS findings
+					// Screenshot-only mode: keep findings scoped to the analysed viewport.
 					const algoWithExtensions = {
 						...algoResult,
-						findings: [
+						findings: filterFindingsToActiveScope([
 							...algoResult.findings,
-							...cssAnalysis.findings,
-							...htmlAnalysis.findings,
-							...jsAnalysis.findings,
-						],
+						]),
 						strengths: [
 							...algoResult.strengths,
-							...cssAnalysis.strengths,
-							...htmlAnalysis.strengths,
-							...jsAnalysis.strengths,
 						],
 					};
 
-					// Merge AI findings with CSS/HTML/JS findings
 					const aiWithExtensions = {
 						...aiResult,
-						findings: [
+						findings: filterFindingsToActiveScope([
 							...(aiResult.findings || []),
-							...cssAnalysis.findings,
-							...htmlAnalysis.findings,
-							...jsAnalysis.findings,
-						],
+						]),
 						strengths: [
 							...(aiResult.strengths || []),
-							...cssAnalysis.strengths,
-							...htmlAnalysis.strengths,
-							...jsAnalysis.strengths,
 						],
 					};
 

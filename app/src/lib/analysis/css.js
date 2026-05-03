@@ -159,7 +159,7 @@ function analyzeCSS(cssData) {
 	// Analyze color palette
 	const colors = cssData.colors;
 	if (colors.length > 0) {
-		if (colors.length > 30) {
+		if (colors.length > 500) {
 			findings.push({
 				category: 'Colour Palette',
 				severity: 'info',
