@@ -47,6 +47,7 @@ export const ALGO_LOADING_STEPS = [
     'Measuring visual balance...',
     'Analysing colour palette...',
     'Checking spacing and layout...',
+    'Generating heatmap overlay...',
     'Compiling report...'
 ];
 
@@ -61,11 +62,24 @@ export const COMPARE_LOADING_STEPS = [
     'Compiling comparison report...'
 ];
 
+export const COMPARE_ALGO_AI_LOADING_STEPS = [
+    'Opening the page in a browser...',
+    'Taking a screenshot...',
+    'Reading page structure and styles...',
+    'Running algorithmic analysis...',
+    'Generating heatmap overlay...',
+    'Sending screenshot to AI...',
+    'Waiting for AI analysis...',
+    'Finding gaps and differences...',
+    'Compiling comparison report...'
+];
+
 export const ALGO_AI_LOADING_STEPS = [
     'Opening the page in a browser...',
     'Taking a screenshot...',
     'Reading page structure and styles...',
     'Running algorithmic checks...',
+    'Generating heatmap overlay...',
     'Writing plain-language findings...',
     'Polishing report language...',
     'Compiling report...'

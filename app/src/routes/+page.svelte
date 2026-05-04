@@ -1,5 +1,6 @@
 ﻿<script>
-	import { CATEGORY_META, CATEGORY_ORDER, SEV, LOADING_STEPS, ALGO_LOADING_STEPS, ALGO_AI_LOADING_STEPS, COMPARE_LOADING_STEPS } from '$lib/ui/constants.js';
+	import { onMount } from 'svelte';
+	import { CATEGORY_META, CATEGORY_ORDER, SEV, LOADING_STEPS, ALGO_LOADING_STEPS, ALGO_AI_LOADING_STEPS, COMPARE_LOADING_STEPS, COMPARE_ALGO_AI_LOADING_STEPS } from '$lib/ui/constants.js';
 
 	let image = $state(/** @type {string | null} */ (null));
 	let url = $state('');
@@ -25,6 +26,7 @@
 	let compareAlgoAiResult = $state(/** @type {any} */ (null));
 	let aiUnavailable = $state(false);
 	let noImages = $state(false);
+	let showHeatmap = $state(false);
 
 	// CI/CD info balloon
 	let cicdOpen = $state(false);
@@ -46,6 +48,12 @@
 	let feedbackCicd = $state('');
 	let feedbackTestedUrl = $state('');
 	let feedbackMissedIssues = $state('');
+
+	// Always start at the top of the page on load/refresh
+	onMount(() => {
+		history.scrollRestoration = 'manual';
+		window.scrollTo({ top: 0, behavior: 'instant' });
+	});
 
 	// Scroll-triggered score card sticky transition
 	let scoreCardSticky = $state(false);
@@ -159,6 +167,7 @@
 		image = null;
 		step = 0;
 		elapsed = 0;
+		showHeatmap = false;
 		activeIdx = -1;
 		resultMode = mode;
 		abortController = new AbortController();
@@ -221,6 +230,7 @@
 
 	function reset() {
 		if (abortController) { abortController.abort(); abortController = null; }
+		loading = false;
 		url = '';
 		image = null;
 		result = null;
@@ -232,8 +242,13 @@
 		expandedFixes = {};
 		aiUnavailable = false;
 		noImages = false;
+		showHeatmap = false;
 		scoreCardSticky = false;
 	}
+
+	let displayedAuditImage = $derived(
+		showHeatmap && result?.heatmap ? result.heatmap : image
+	);
 
 	function drawCanvas() {
 		if (!canvasEl || !imgEl || !result) return;
@@ -246,6 +261,7 @@
 			if (!ctx) return;
 			canvasEl.width = W;
 			canvasEl.height = H;
+			ctx.clearRect(0, 0, W, H);
 			ctx.drawImage(imgEl, 0, 0);
 			badgeRects = [];
 		};
@@ -276,6 +292,7 @@
 	}
 
 	$effect(() => {
+		void displayedAuditImage;
 		drawCanvas();
 	});
 
@@ -363,9 +380,9 @@
 					stroke-linecap="round"
 				/>
 			</svg>
-			<div style="display:flex;align-items:flex-end;gap:5px;">
+			<div style="display:flex;align-items:baseline;gap:5px;">
 				<span style="font-weight:700;font-size:16px;letter-spacing:-0.02em;">Percepta</span>
-				<span style="font-size:11px;font-weight:700;letter-spacing:-0.02em;color:{theme === 'dark' ? 'var(--text-3)' : '#9ca3af'};line-height:1.6;">Beta</span>
+				<span style="font-size:11px;font-weight:700;letter-spacing:-0.02em;color:{theme === 'dark' ? 'var(--text-3)' : '#9ca3af'};">Beta</span>
 			</div>
 		</div>
 		<div style="display:flex;align-items:center;gap:12px;">
@@ -517,7 +534,7 @@
 			</button>
 
 			{#if loading}
-				{@const loadSteps = mode === 'compare' || mode === 'compare-algo-ai' ? COMPARE_LOADING_STEPS : mode === 'algo-ai' ? ALGO_AI_LOADING_STEPS : mode === 'ai' ? LOADING_STEPS : ALGO_LOADING_STEPS}
+				{@const loadSteps = mode === 'compare' ? COMPARE_LOADING_STEPS : mode === 'compare-algo-ai' ? COMPARE_ALGO_AI_LOADING_STEPS : mode === 'algo-ai' ? ALGO_AI_LOADING_STEPS : mode === 'ai' ? LOADING_STEPS : ALGO_LOADING_STEPS}
 				{@const pct = Math.round((step / Math.max(loadSteps.length - 1, 1)) * 88) + 6}
 				<div style="margin-top:14px;">
 					<div style="height:3px;border-radius:2px;background:var(--border);overflow:hidden;">
@@ -879,7 +896,7 @@
 			{/if}
 
 			<!-- Hidden source image for canvas drawing -->
-			<img bind:this={imgEl} src={image} alt="" style="display:none;" />
+			<img bind:this={imgEl} src={displayedAuditImage} alt="" style="display:none;" />
 
 			{#snippet scoreCardContent()}
 				<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:24px;display:flex;gap:24px;align-items:flex-start;">
@@ -948,6 +965,23 @@
 					<div style="overflow:hidden;max-height:{scoreCardSticky ? '600px' : '0'};opacity:{scoreCardSticky ? 1 : 0};transition:max-height 0.3s ease,opacity 0.3s ease;">
 						{@render scoreCardContent()}
 					</div>
+
+					{#if result?.heatmap}
+						<div style="display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:8px;">
+							<button
+								onclick={() => (showHeatmap = false)}
+								style="padding:6px 12px;border-radius:9px;border:1px solid {showHeatmap ? 'var(--border)' : '#2563eb55'};background:{showHeatmap ? 'transparent' : '#2563eb1a'};color:{showHeatmap ? 'var(--text-3)' : '#60a5fa'};font-size:12px;font-weight:600;cursor:pointer;"
+							>
+								Screenshot
+							</button>
+							<button
+								onclick={() => (showHeatmap = true)}
+								style="padding:6px 12px;border-radius:9px;border:1px solid {showHeatmap ? '#ef444455' : 'var(--border)'};background:{showHeatmap ? '#ef44441a' : 'transparent'};color:{showHeatmap ? '#f87171' : 'var(--text-3)'};font-size:12px;font-weight:600;cursor:pointer;"
+							>
+								Heatmap
+							</button>
+						</div>
+					{/if}
 
 					<!-- Screenshot canvas -->
 					<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">
