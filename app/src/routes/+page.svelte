@@ -25,7 +25,6 @@
 	let compareResult = $state(/** @type {any} */ (null));
 	let compareAlgoAiResult = $state(/** @type {any} */ (null));
 	let aiUnavailable = $state(false);
-	let noImages = $state(false);
 	let showHeatmap = $state(false);
 
 	// CI/CD info balloon
@@ -203,7 +202,6 @@
 						const data = event.result;
 						image = data.screenshot;
 						aiUnavailable = !!data.aiUnavailable;
-					noImages = !!data.noImages;
 						if (data.mode === 'compare') {
 							compareResult = data;
 						} else if (data.mode === 'compare-algo-ai') {
@@ -241,7 +239,6 @@
 		activeIdx = -1;
 		expandedFixes = {};
 		aiUnavailable = false;
-		noImages = false;
 		showHeatmap = false;
 		scoreCardSticky = false;
 	}
@@ -742,16 +739,6 @@
 				</div>
 			{/if}
 
-			{#if noImages}
-				<div style="background:#1e3a5f1a;border:1px solid #2563eb55;border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;gap:12px;align-items:flex-start;">
-					<svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;margin-top:2px;"><circle cx="7" cy="7" r="6" stroke="#3b82f6" stroke-width="1.3"/><path d="M7 4v3.5M7 9.5v.5" stroke="#3b82f6" stroke-width="1.4" stroke-linecap="round"/></svg>
-					<div>
-						<p style="font-size:13px;font-weight:600;color:var(--info-text);margin:0 0 4px;">Reference images not available for this analysis</p>
-						<p style="font-size:13px;color:var(--text-2);margin:0;line-height:1.5;">The AI ran successfully but did not find any book reference images that matched the findings closely enough. The written analysis and recommendations are still complete.</p>
-					</div>
-				</div>
-			{/if}
-
 			<!-- Header -->
 			<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
 				<div>
@@ -881,16 +868,6 @@
 					<div>
 						<p style="font-size:13px;font-weight:600;color:var(--warn-text);margin:0 0 4px;">Plain-language summary temporarily unavailable</p>
 						<p style="font-size:13px;color:var(--text-2);margin:0;line-height:1.5;">Gemini is currently overloaded, so the results are displayed as direct algorithmic output without simplified explanations or reference images. The analysis remains accurate, but the wording may be more technical and less user-friendly than usual.</p>
-					</div>
-				</div>
-			{/if}
-
-			{#if noImages}
-				<div style="background:#1e3a5f1a;border:1px solid #2563eb55;border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;gap:12px;align-items:flex-start;">
-					<svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;margin-top:2px;"><circle cx="7" cy="7" r="6" stroke="#3b82f6" stroke-width="1.3"/><path d="M7 4v3.5M7 9.5v.5" stroke="#3b82f6" stroke-width="1.4" stroke-linecap="round"/></svg>
-					<div>
-						<p style="font-size:13px;font-weight:600;color:var(--info-text);margin:0 0 4px;">Reference images not available for this analysis</p>
-						<p style="font-size:13px;color:var(--text-2);margin:0;line-height:1.5;">The AI ran successfully but did not find any book reference images that matched the findings closely enough. The written analysis and recommendations are still complete.</p>
 					</div>
 				</div>
 			{/if}

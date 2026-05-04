@@ -436,10 +436,10 @@ const HEATMAP_PROMPT =
 	'Return only one final image that is the original screenshot plus heat overlay.';
 
 async function buildHeatmap(apiKey, screenshotB64, elements, vpW, vpH) {
-	const HEATMAP_TIMEOUT_MS = 60000;
+	const HEATMAP_TIMEOUT_MS = 40000;
 	const heatmapPipeline = (async () => {
 		try {
-			const result = await geminiGenerateImage(apiKey, HEATMAP_PROMPT, screenshotB64, { timeoutMs: 55000 });
+			const result = await geminiGenerateImage(apiKey, HEATMAP_PROMPT, screenshotB64, { timeoutMs: 35000 });
 			console.info('[Percepta] Heatmap generated with', GEMINI_IMAGE_MODEL);
 			return result;
 		} catch (err) {
