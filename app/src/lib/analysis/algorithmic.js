@@ -64,6 +64,137 @@ function toBBox(rect, vpW, vpH) {
     ];
 }
 
+function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+}
+
+function escapeXml(value) {
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function isAttentionCandidate(element, vpW, vpH) {
+    const area = (element.rect?.w || 0) * (element.rect?.h || 0);
+    const areaRatio = area / Math.max(vpW * vpH, 1);
+    const textLength = (element.textContent || '').trim().length;
+    const hasMeaningfulText = !!element.isText && textLength >= 2;
+    const isHeadingLike = /^h[1-6]$/.test(element.tag || '') || (element.fontSize || 0) >= 24;
+    const isInteractive = !!element.isInteractive && element.rect.w >= 28 && element.rect.h >= 20;
+    const isImageLike = element.tag === 'img' || !!element.hasBackgroundImage;
+    const isDecorativeContainer = !hasMeaningfulText && !isInteractive && !isImageLike;
+
+    if (areaRatio > 0.45 && !isImageLike && !isHeadingLike) return false;
+    if (isDecorativeContainer && areaRatio > 0.06) return false;
+    if (element.rect.w < 6 || element.rect.h < 6) return false;
+
+    return hasMeaningfulText || isInteractive || isImageLike || isHeadingLike;
+}
+
+function calculateAttentionWeight(element, vpW, vpH) {
+    const area = (element.rect?.w || 0) * (element.rect?.h || 0);
+    const areaRatio = area / Math.max(vpW * vpH, 1);
+    const fontSize = Number(element.fontSize) || 0;
+    const fontWeight = Number.parseInt(element.fontWeight, 10) || 400;
+    const centerX = (element.rect?.x || 0) + (element.rect?.w || 0) / 2;
+    const centerY = (element.rect?.y || 0) + (element.rect?.h || 0) / 2;
+    const textLength = (element.textContent || '').trim().length;
+    const isHeadingLike = /^h[1-6]$/.test(element.tag || '') || fontSize >= 24;
+    const isInteractive = !!element.isInteractive && element.rect.w >= 28 && element.rect.h >= 20;
+    const isImageLike = element.tag === 'img' || !!element.hasBackgroundImage;
+    let weight = 0;
+
+    weight += Math.min(areaRatio * 120, 16);
+    weight += Math.min(fontSize / 1.8, 18);
+    weight += clamp(((fontWeight - 400) / 500) * 10, 0, 10);
+    weight += clamp((1 - centerY / Math.max(vpH, 1)) * 10, 0, 10);
+    weight += clamp((1 - centerX / Math.max(vpW, 1)) * 6, 0, 6);
+    weight += Math.min(textLength / 28, 8);
+
+    if (isHeadingLike) weight += 18;
+    if (isInteractive) weight += 14;
+    if (isImageLike) weight += 12;
+    if (element.hasBackgroundImage) weight += 4;
+    if ((element.zIndex || 0) > 0) weight += Math.min(element.zIndex, 10);
+
+    if (!element.isText && !isInteractive && !isImageLike) weight -= 10;
+    if (areaRatio > 0.25 && !isImageLike) weight -= 18;
+    if (areaRatio > 0.12 && !isHeadingLike && !isInteractive && !isImageLike) weight -= 10;
+
+    return clamp(weight, 0, 100);
+}
+
+export function generateAttentionHeatmap(elements, vpW, vpH, screenshotB64 = null) {
+    const visible = (elements || []).filter(el =>
+        el?.rect &&
+        el.rect.w > 2 &&
+        el.rect.h > 2 &&
+        el.rect.x < vpW &&
+        el.rect.y < vpH &&
+        el.rect.x + el.rect.w > 0 &&
+        el.rect.y + el.rect.h > 0
+    );
+
+    const ranked = visible
+        .filter(element => isAttentionCandidate(element, vpW, vpH))
+        .map((element, index) => ({
+            index,
+            element,
+            weight: calculateAttentionWeight(element, vpW, vpH),
+        }))
+        .filter(entry => entry.weight >= 22)
+        .sort((a, b) => b.weight - a.weight)
+        .slice(0, 36)
+        .sort((a, b) => a.weight - b.weight);
+
+    const defs = [];
+    const shapes = [];
+
+    ranked.forEach((entry, idx) => {
+        const { element, weight } = entry;
+        const centerX = clamp(element.rect.x + element.rect.w / 2, 0, vpW);
+        const centerY = clamp(element.rect.y + element.rect.h / 2, 0, vpH);
+        const radiusX = clamp(Math.max(element.rect.w * 0.36, 16), 16, vpW * 0.13);
+        const radiusY = clamp(Math.max(element.rect.h * 0.36, 16), 16, vpH * 0.13);
+        const intensity = clamp(weight / 100, 0.22, 0.95);
+        const gradientId = `heat-${idx}`;
+
+        defs.push(
+            `<radialGradient id="${gradientId}" cx="50%" cy="50%" r="50%">` +
+            `<stop offset="0%" stop-color="rgb(255,55,40)" stop-opacity="${(intensity * 0.86).toFixed(3)}" />` +
+            `<stop offset="42%" stop-color="rgb(255,150,0)" stop-opacity="${(intensity * 0.52).toFixed(3)}" />` +
+            `<stop offset="100%" stop-color="rgb(255,255,0)" stop-opacity="0" />` +
+            `</radialGradient>`
+        );
+
+        shapes.push(
+            `<ellipse cx="${centerX.toFixed(1)}" cy="${centerY.toFixed(1)}" rx="${radiusX.toFixed(1)}" ry="${radiusY.toFixed(1)}" fill="url(#${gradientId})" />`
+        );
+    });
+
+    const screenshotLayer = screenshotB64
+        ? `<image href="data:image/png;base64,${screenshotB64}" x="0" y="0" width="${vpW}" height="${vpH}" preserveAspectRatio="none" />`
+        : `<rect width="100%" height="100%" fill="rgb(12,14,20)" fill-opacity="0.90" />`;
+
+    const toneLayer = screenshotB64
+        ? `<rect width="100%" height="100%" fill="rgb(7,10,20)" fill-opacity="0.28" />`
+        : '';
+
+    const svg = [
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${vpW}" height="${vpH}" viewBox="0 0 ${vpW} ${vpH}">`,
+        `<title>${escapeXml('Percepta attention heatmap')}</title>`,
+        screenshotLayer,
+        toneLayer,
+        `<defs>${defs.join('')}</defs>`,
+        `<g>${shapes.join('')}</g>`,
+        `</svg>`
+    ].join('');
+
+    return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
+}
+
 // Return a quoted label for an element's textContent: short text is returned
 // as-is; text over 60 chars is truncated with ellipsis. Falls back to null
 // for elements with no meaningful text, so callers can use a zone fallback.
@@ -181,7 +312,7 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
         if (bodyFailing.length > 0) {
             bodyFailing.sort((a, b) => a.lc - b.lc);
             const worst = bodyFailing[0];
-            if (bodyFailRatio > 0.15 || worst.lc < 22) {
+            if ((bodyFailing.length >= 2 && bodyFailRatio > 0.15) || worst.lc < 22) {
                 const zone = zoneDesc(worst.el.rect.x + worst.el.rect.w / 2, worst.el.rect.y + worst.el.rect.h / 2, vpW, vpH);
                 const deficit = Math.round(worst.needed - worst.lc);
                 findings.push({
