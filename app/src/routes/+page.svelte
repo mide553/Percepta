@@ -1,5 +1,4 @@
-﻿<script>
-	import { onMount } from 'svelte';
+<script>
 	import { CATEGORY_META, CATEGORY_ORDER, SEV, LOADING_STEPS, ALGO_LOADING_STEPS, ALGO_AI_LOADING_STEPS, COMPARE_LOADING_STEPS, COMPARE_ALGO_AI_LOADING_STEPS } from '$lib/ui/constants.js';
 
 	let image = $state(/** @type {string | null} */ (null));
@@ -49,7 +48,7 @@
 	let feedbackMissedIssues = $state('');
 
 	// Always start at the top of the page on load/refresh
-	onMount(() => {
+	$effect(() => {
 		history.scrollRestoration = 'manual';
 		window.scrollTo({ top: 0, behavior: 'instant' });
 	});
@@ -217,7 +216,10 @@
 			if (!gotResult) throw new Error('Analysis ended unexpectedly — please try again.');
 		} catch (e) {
 			if (/** @type {Error} */ (e).name !== 'AbortError') {
-				errorMsg = /** @type {Error} */ (e).message;
+				const msg = /** @type {Error} */ (e).message;
+				errorMsg = msg === 'Failed to fetch'
+					? 'Could not reach the server. Make sure the app is running and try again.'
+					: msg;
 			}
 		} finally {
 			clearInterval(elapsedInterval);
@@ -459,7 +461,7 @@
 							onclick={reset}
 							style="padding:10px 14px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--text-4);font-size:13px;cursor:pointer;"
 							aria-label="Clear URL"
-						>✕</button>
+						>?</button>
 					{/if}
 				</div>
 			</div>
@@ -572,7 +574,7 @@
 				</div>
 			</div>
 		{:else if compareResult}
-			<!-- ── COMPARE VIEW ───────────────────────────────────────────────── -->
+			<!-- -- COMPARE VIEW ------------------------------------------------- -->
 			{@const algoFindings = compareResult.algo?.findings ?? []}
 			{@const aiFindings = compareResult.ai?.findings ?? []}
 			{@const ALIASES = /** @type {Record<string,string>} */({'Visual Balance': 'Optical Centering'})}
@@ -677,14 +679,14 @@
 										{#if hasAlgo}
 											<span style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:#dcfce7;color:#059669;font-size:11px;font-weight:700;">{algoCount}</span>
 										{:else}
-											<span style="color:var(--text-4);">—</span>
+											<span style="color:var(--text-4);">·</span>
 										{/if}
 									</td>
 									<td style="text-align:center;padding:10px 16px;">
 										{#if hasAi}
 											<span style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:#dbeafe;color:#2563eb;font-size:11px;font-weight:700;">{aiCount}</span>
 										{:else}
-											<span style="color:var(--text-4);">—</span>
+											<span style="color:var(--text-4);">·</span>
 										{/if}
 									</td>
 									<td style="text-align:center;padding:10px 16px;color:var(--text-3);">{algoCount + aiCount}</td>
@@ -721,7 +723,7 @@
 				{/each}
 			</div>
 		{:else if compareAlgoAiResult}
-			<!-- ── ALGO DIFF VIEW ─────────────────────────────────────────────── -->
+			<!-- -- ALGO DIFF VIEW ----------------------------------------------- -->
 			{@const algoFindings = compareAlgoAiResult.algo?.findings ?? []}
 			{@const aiFindings = compareAlgoAiResult.algoAi?.findings ?? []}
 			{@const score = compareAlgoAiResult.overallScore ?? 0}
@@ -730,11 +732,11 @@
 			{@const gradeLabel = score >= 80 ? 'Good' : score >= 55 ? 'Fair' : 'Needs Work'}
 
 			{#if aiUnavailable}
-				<div style="background:#854d0e1a;border:1px solid #a16207;border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;gap:12px;align-items:flex-start;">
-					<svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;margin-top:2px;"><circle cx="7" cy="7" r="6" stroke="#b45309" stroke-width="1.3"/><path d="M7 4v3.5M7 9.5v.5" stroke="#b45309" stroke-width="1.4" stroke-linecap="round"/></svg>
+				<div style="background:var(--warn-bg);border:1px solid var(--warn-border);border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;gap:12px;align-items:flex-start;">
+					<svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;margin-top:2px;"><circle cx="7" cy="7" r="6" stroke="var(--warn-text)" stroke-width="1.3"/><path d="M7 4v3.5M7 9.5v.5" stroke="var(--warn-text)" stroke-width="1.4" stroke-linecap="round"/></svg>
 					<div>
 						<p style="font-size:13px;font-weight:600;color:var(--warn-text);margin:0 0 4px;">Plain-language summary temporarily unavailable</p>
-						<p style="font-size:13px;color:var(--text-2);margin:0;line-height:1.5;">Gemini is currently overloaded, so the results are displayed as direct algorithmic output without simplified explanations or reference images. The analysis remains accurate, but the descriptions may be more technical than usual. For a more detailed analysis, you can try auditing the page again in a few minutes.</p>
+						<p style="font-size:13px;color:var(--text-2);margin:0;line-height:1.5;">API is currently overloaded, so the results are displayed as direct algorithmic output without simplified explanations or reference images. The analysis remains accurate, but the descriptions may be more technical than usual. For a more detailed analysis, you can try auditing the page again in a few minutes.</p>
 					</div>
 				</div>
 			{/if}
@@ -863,11 +865,11 @@
 			</div>
 
 			{#if aiUnavailable}
-				<div style="background:#854d0e1a;border:1px solid #a16207;border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;gap:12px;align-items:flex-start;">
-					<svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;margin-top:2px;"><circle cx="7" cy="7" r="6" stroke="#b45309" stroke-width="1.3"/><path d="M7 4v3.5M7 9.5v.5" stroke="#b45309" stroke-width="1.4" stroke-linecap="round"/></svg>
+				<div style="background:var(--warn-bg);border:1px solid var(--warn-border);border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;gap:12px;align-items:flex-start;">
+					<svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;margin-top:2px;"><circle cx="7" cy="7" r="6" stroke="var(--warn-text)" stroke-width="1.3"/><path d="M7 4v3.5M7 9.5v.5" stroke="var(--warn-text)" stroke-width="1.4" stroke-linecap="round"/></svg>
 					<div>
 						<p style="font-size:13px;font-weight:600;color:var(--warn-text);margin:0 0 4px;">Plain-language summary temporarily unavailable</p>
-						<p style="font-size:13px;color:var(--text-2);margin:0;line-height:1.5;">Gemini is currently overloaded, so the results are displayed as direct algorithmic output without simplified explanations or reference images. The analysis remains accurate, but the wording may be more technical and less user-friendly than usual.</p>
+						<p style="font-size:13px;color:var(--text-2);margin:0;line-height:1.5;">API is currently overloaded, so the results are displayed as direct algorithmic output without simplified explanations or reference images. The analysis remains accurate, but the descriptions may be more technical than usual. For a more detailed analysis, you can try auditing the page again in a few minutes.</p>
 					</div>
 				</div>
 			{/if}
@@ -959,6 +961,11 @@
 							</button>
 						</div>
 					{/if}
+
+					<!-- Screenshot notice -->
+					<p style="font-size:11px;color:var(--text-3);line-height:1.5;margin:0;">
+						The audit is based on the visible viewport at load time, not the full page. Content below the fold may not be evaluated.
+					</p>
 
 					<!-- Screenshot canvas -->
 					<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">
@@ -1094,7 +1101,7 @@
 		<p style="font-size:11px;color:{theme === 'dark' ? 'var(--text-3)' : 'var(--text-4)'};">Percepta is a non-profit prototype developed as part of a Bachelor's thesis. Not intended for commercial use.</p>
 	</footer>
 
-	<!-- ── CI/CD info balloon ─────────────────────────────────────────────── -->
+	<!-- -- CI/CD info balloon ----------------------------------------------- -->
 	<button
 		onclick={() => { cicdOpen = !cicdOpen; }}
 		title="CI/CD pipeline info"
@@ -1137,7 +1144,7 @@
 		</div>
 	{/if}
 
-	<!-- ── Feedback floating button ───────────────────────────────────────── -->
+	<!-- -- Feedback floating button ----------------------------------------- -->
 	<button
 		onclick={() => { feedbackOpen = !feedbackOpen; }}
 		title="Leave professional feedback"
@@ -1198,8 +1205,9 @@
 
 					<div style="display:flex;flex-direction:column;gap:14px;">
 						<div>
-							<label style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Name <span style="color:var(--text-4);font-weight:400;">(optional)</span></label>
+							<label for="fb-name" style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Name <span style="color:var(--text-4);font-weight:400;">(optional)</span></label>
 							<input
+								id="fb-name"
 								type="text"
 								bind:value={feedbackName}
 								placeholder="Your name"
@@ -1209,8 +1217,9 @@
 							/>
 						</div>
 						<div>
-							<label style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Role <span style="color:var(--text-4);font-weight:400;">(optional)</span></label>
+							<label for="fb-role" style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Role <span style="color:var(--text-4);font-weight:400;">(optional)</span></label>
 							<input
+								id="fb-role"
 								type="text"
 								bind:value={feedbackRole}
 								placeholder="e.g. UX Designer, Developer, Researcher"
@@ -1245,9 +1254,10 @@
 						</div>
 
 						<div>
-							<label style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Comment <span style="color:#ef4444;font-size:10px;margin-left:3px;">required</span></label>
+							<label for="fb-comment" style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Comment <span style="color:#ef4444;font-size:10px;margin-left:3px;">required</span></label>
 							<textarea
-								bind:value={feedbackComment}
+								id="fb-comment"
+							bind:value={feedbackComment}
 								placeholder="Share your thoughts — what works well, what's confusing, what could be improved…"
 								maxlength="2000"
 								rows="6"
@@ -1261,8 +1271,9 @@
 						<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:14px;">
 							<p style="font-size:12px;font-weight:700;color:var(--text-2);margin:0;letter-spacing:-0.01em;">Help us improve detection <span style="color:var(--text-4);font-weight:400;font-size:11px;">(optional)</span></p>
 							<div>
-								<label style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Website(s) you tested</label>
+								<label for="fb-tested-url" style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Website(s) you tested</label>
 								<input
+									id="fb-tested-url"
 									type="url"
 									bind:value={feedbackTestedUrl}
 									placeholder="https://example.com"
@@ -1273,10 +1284,11 @@
 								<p style="font-size:11px;color:var(--text-4);margin-top:3px;">Paste the URL of the site you ran through Percepta</p>
 							</div>
 							<div>
-								<label style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Issues Percepta missed</label>
+								<label for="fb-missed" style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Issues Percepta missed</label>
 								<textarea
+									id="fb-missed"
 									bind:value={feedbackMissedIssues}
-									placeholder="e.g. Low-contrast placeholder text wasn't flagged, icon-only buttons had no accessible label…"
+									placeholder="e.g. Low-contrast placeholder text wasn't flagged, icon-only buttons had no accessible label—"
 									maxlength="1000"
 									rows="4"
 									disabled={feedbackStatus === 'sending'}

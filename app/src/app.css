@@ -30,6 +30,10 @@
 	--accent-label: #2563eb;
 	--warn-text: #92400e;
 	/* amber-800 — 7:1 on white ✓ AAA */
+	--warn-bg: #fef3c7;
+	/* amber-100 — visible amber tint on white */
+	--warn-border: #d97706;
+	/* amber-600 — clear border on white */
 	--info-text: #1d4ed8;
 	/* blue-700  — 7.5:1 on white ✓ AAA */
 }
@@ -69,6 +73,8 @@
 	--active-finding-bg: #1e1e2e;
 	--accent-label: #60a5fa;
 	--warn-text: #fbbf24;
+	--warn-bg: rgba(133, 77, 14, 0.10);
+	--warn-border: #a16207;
 	/* amber-400 — 9.6:1 on dark ✓ AAA */
 	--info-text: #60a5fa;
 	/* blue-400  — fine on dark */
