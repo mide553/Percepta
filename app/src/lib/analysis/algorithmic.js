@@ -64,6 +64,137 @@ function toBBox(rect, vpW, vpH) {
     ];
 }
 
+function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+}
+
+function escapeXml(value) {
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function isAttentionCandidate(element, vpW, vpH) {
+    const area = (element.rect?.w || 0) * (element.rect?.h || 0);
+    const areaRatio = area / Math.max(vpW * vpH, 1);
+    const textLength = (element.textContent || '').trim().length;
+    const hasMeaningfulText = !!element.isText && textLength >= 2;
+    const isHeadingLike = /^h[1-6]$/.test(element.tag || '') || (element.fontSize || 0) >= 24;
+    const isInteractive = !!element.isInteractive && element.rect.w >= 28 && element.rect.h >= 20;
+    const isImageLike = element.tag === 'img' || !!element.hasBackgroundImage;
+    const isDecorativeContainer = !hasMeaningfulText && !isInteractive && !isImageLike;
+
+    if (areaRatio > 0.45 && !isImageLike && !isHeadingLike) return false;
+    if (isDecorativeContainer && areaRatio > 0.06) return false;
+    if (element.rect.w < 6 || element.rect.h < 6) return false;
+
+    return hasMeaningfulText || isInteractive || isImageLike || isHeadingLike;
+}
+
+function calculateAttentionWeight(element, vpW, vpH) {
+    const area = (element.rect?.w || 0) * (element.rect?.h || 0);
+    const areaRatio = area / Math.max(vpW * vpH, 1);
+    const fontSize = Number(element.fontSize) || 0;
+    const fontWeight = Number.parseInt(element.fontWeight, 10) || 400;
+    const centerX = (element.rect?.x || 0) + (element.rect?.w || 0) / 2;
+    const centerY = (element.rect?.y || 0) + (element.rect?.h || 0) / 2;
+    const textLength = (element.textContent || '').trim().length;
+    const isHeadingLike = /^h[1-6]$/.test(element.tag || '') || fontSize >= 24;
+    const isInteractive = !!element.isInteractive && element.rect.w >= 28 && element.rect.h >= 20;
+    const isImageLike = element.tag === 'img' || !!element.hasBackgroundImage;
+    let weight = 0;
+
+    weight += Math.min(areaRatio * 120, 16);
+    weight += Math.min(fontSize / 1.8, 18);
+    weight += clamp(((fontWeight - 400) / 500) * 10, 0, 10);
+    weight += clamp((1 - centerY / Math.max(vpH, 1)) * 10, 0, 10);
+    weight += clamp((1 - centerX / Math.max(vpW, 1)) * 6, 0, 6);
+    weight += Math.min(textLength / 28, 8);
+
+    if (isHeadingLike) weight += 18;
+    if (isInteractive) weight += 14;
+    if (isImageLike) weight += 12;
+    if (element.hasBackgroundImage) weight += 4;
+    if ((element.zIndex || 0) > 0) weight += Math.min(element.zIndex, 10);
+
+    if (!element.isText && !isInteractive && !isImageLike) weight -= 10;
+    if (areaRatio > 0.25 && !isImageLike) weight -= 18;
+    if (areaRatio > 0.12 && !isHeadingLike && !isInteractive && !isImageLike) weight -= 10;
+
+    return clamp(weight, 0, 100);
+}
+
+export function generateAttentionHeatmap(elements, vpW, vpH, screenshotB64 = null) {
+    const visible = (elements || []).filter(el =>
+        el?.rect &&
+        el.rect.w > 2 &&
+        el.rect.h > 2 &&
+        el.rect.x < vpW &&
+        el.rect.y < vpH &&
+        el.rect.x + el.rect.w > 0 &&
+        el.rect.y + el.rect.h > 0
+    );
+
+    const ranked = visible
+        .filter(element => isAttentionCandidate(element, vpW, vpH))
+        .map((element, index) => ({
+            index,
+            element,
+            weight: calculateAttentionWeight(element, vpW, vpH),
+        }))
+        .filter(entry => entry.weight >= 22)
+        .sort((a, b) => b.weight - a.weight)
+        .slice(0, 36)
+        .sort((a, b) => a.weight - b.weight);
+
+    const defs = [];
+    const shapes = [];
+
+    ranked.forEach((entry, idx) => {
+        const { element, weight } = entry;
+        const centerX = clamp(element.rect.x + element.rect.w / 2, 0, vpW);
+        const centerY = clamp(element.rect.y + element.rect.h / 2, 0, vpH);
+        const radiusX = clamp(Math.max(element.rect.w * 0.36, 16), 16, vpW * 0.13);
+        const radiusY = clamp(Math.max(element.rect.h * 0.36, 16), 16, vpH * 0.13);
+        const intensity = clamp(weight / 100, 0.22, 0.95);
+        const gradientId = `heat-${idx}`;
+
+        defs.push(
+            `<radialGradient id="${gradientId}" cx="50%" cy="50%" r="50%">` +
+            `<stop offset="0%" stop-color="rgb(255,55,40)" stop-opacity="${(intensity * 0.86).toFixed(3)}" />` +
+            `<stop offset="42%" stop-color="rgb(255,150,0)" stop-opacity="${(intensity * 0.52).toFixed(3)}" />` +
+            `<stop offset="100%" stop-color="rgb(255,255,0)" stop-opacity="0" />` +
+            `</radialGradient>`
+        );
+
+        shapes.push(
+            `<ellipse cx="${centerX.toFixed(1)}" cy="${centerY.toFixed(1)}" rx="${radiusX.toFixed(1)}" ry="${radiusY.toFixed(1)}" fill="url(#${gradientId})" />`
+        );
+    });
+
+    const screenshotLayer = screenshotB64
+        ? `<image href="data:image/png;base64,${screenshotB64}" x="0" y="0" width="${vpW}" height="${vpH}" preserveAspectRatio="none" />`
+        : `<rect width="100%" height="100%" fill="rgb(12,14,20)" fill-opacity="0.90" />`;
+
+    const toneLayer = screenshotB64
+        ? `<rect width="100%" height="100%" fill="rgb(7,10,20)" fill-opacity="0.28" />`
+        : '';
+
+    const svg = [
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${vpW}" height="${vpH}" viewBox="0 0 ${vpW} ${vpH}">`,
+        `<title>${escapeXml('Percepta attention heatmap')}</title>`,
+        screenshotLayer,
+        toneLayer,
+        `<defs>${defs.join('')}</defs>`,
+        `<g>${shapes.join('')}</g>`,
+        `</svg>`
+    ].join('');
+
+    return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
+}
+
 // Return a quoted label for an element's textContent: short text is returned
 // as-is; text over 60 chars is truncated with ellipsis. Falls back to null
 // for elements with no meaningful text, so callers can use a zone fallback.
@@ -181,7 +312,7 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
         if (bodyFailing.length > 0) {
             bodyFailing.sort((a, b) => a.lc - b.lc);
             const worst = bodyFailing[0];
-            if (bodyFailRatio > 0.15 || worst.lc < 22) {
+            if ((bodyFailing.length >= 2 && bodyFailRatio > 0.15) || worst.lc < 22) {
                 const zone = zoneDesc(worst.el.rect.x + worst.el.rect.w / 2, worst.el.rect.y + worst.el.rect.h / 2, vpW, vpH);
                 const deficit = Math.round(worst.needed - worst.lc);
                 findings.push({
@@ -1186,7 +1317,12 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
             for (const el of sorted7) {
                 if (usedInStack.has(el)) continue;
                 const group = stackCandidates
-                    .filter(o => o !== el && Math.abs(o.rect.x - el.rect.x) < 24)
+                    .filter(o => {
+                        if (o === el) return false;
+                        if (Math.abs(o.rect.x - el.rect.x) >= 24) return false;
+                        const widthRatio = Math.min(o.rect.w, el.rect.w) / Math.max(o.rect.w, el.rect.w);
+                        return widthRatio >= 0.72;
+                    })
                     .sort((a, b) => a.rect.y - b.rect.y);
                 if (group.length >= 4) {
                     stacks.push([el, ...group]);
@@ -1211,9 +1347,9 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                     id: nid(),
                     category: 'Spacing & Layout',
                     severity: 'info',
-                    element: `${unevenStacks.length} vertical content stack${unevenStacks.length !== 1 ? 's' : ''} have inconsistent gaps between items`,
-                    issue: `${unevenStacks.length} groups of vertically stacked elements have varying gaps between items in the same stack. When elements form a visual list, step sequence, or card column, the gaps between them should be uniform — the spacing itself carries meaning. Irregular gaps imply irregular relationships: items that are further apart appear less related even if they semantically belong to the same group.`,
-                    recommendation: 'Within any vertical stack of related elements (lists, steps, form rows, card columns), use one consistent gap value throughout the stack. Use a larger gap only when introducing a new semantic group. In CSS: `gap` inside a flex or grid container is the cleanest approach.',
+                    element: `${unevenStacks.length} vertical content stack${unevenStacks.length !== 1 ? 's' : ''} use slightly uneven gaps between items`,
+                    issue: `${unevenStacks.length} groups of vertically stacked elements use slightly different spacing values between neighboring items. On list-like groups, step sequences, or card columns, a steadier gap rhythm usually feels tidier and makes related items read as one unit more easily.`,
+                    recommendation: 'Where a column is meant to read as one repeated group, use a consistent gap value between items and reserve larger spacing changes for real section breaks. In CSS, a single `gap` value on the parent flex or grid container is usually the cleanest way to do this.',
                     boundingBox: toBBox(unevenStacks[0][0].rect, vpW, vpH),
                 });
             }
@@ -1721,12 +1857,77 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                    issue: `${tooWide.length} text area${tooWide.length !== 1 ? 's' : ''} appear to have lines longer than about 75 characters${(() => { const lbl = elQ(worst); return lbl ? `, including ${lbl}` : ''; })()}. Long lines make it hard for the eye to track back from the end of one line to the start of the next, which slows reading and can cause the eye to land on the wrong line.`,
                 recommendation: 'Try constraining paragraph and body text to a max-width of around 60 to 70 characters wide. In CSS this is typically somewhere between 55ch and 75ch. Headings can stay wider.',
                 boundingBox: toBBox(worst.rect, vpW, vpH),
+                bookImages: [
+                    { src: 'image112.jpg', caption: 'Lines running 90–110 characters force the eye to travel far right and struggle to find the start of the next line.' },
+                    { src: 'image113.jpeg', caption: 'A width of 20–35em for line length will get you in the right ballpark.' },
+                    { src: 'image114.jpeg', caption: 'Stick to the 45–75 character range to play it safe — going wider enters risky territory.' },
+                ],
             });
             lineFindingPushed = true;
         }
 
         if (!lineFindingPushed && proseBodyText.length >= 2) {
             strengths.push('Text blocks are a comfortable width for reading — line lengths are within the 45–75 character optimal range.');
+        }
+    }
+
+    // ── CHECK 13b — Grey Text on Coloured Background ──────────────────────────
+    // Source: Refactoring UI — "Use colour to convey hierarchy, not just lighten"
+    // Grey text on a white/light background reduces contrast intentionally.
+    // Grey text on a saturated/coloured background does NOT reduce contrast the
+    // same way — the coloured surface can actually make grey text harder to read
+    // because grey sits between the hue of the background and pure white, causing
+    // the text to look washed out, disabled, or simply muddy.
+    {
+        const greyTextSatMax = 0.12;   // text is "grey" if saturation < 12%
+        const greyTextLumaMin = 0.25;  // not almost-black
+        const greyTextLumaMax = 0.75;  // not almost-white
+        const bgSatMin = 0.15;         // background must be meaningfully chromatic
+        const bgLumaMin = 0.10;        // not near-black backgrounds
+        const bgLumaMax = 0.90;        // not near-white backgrounds
+        const minViolations = 3;
+
+        const greyOnColour = textEls.filter(e => {
+            if (!e.bg) return false;
+            const [, tS, tL] = rgbToHsl(e.color[0], e.color[1], e.color[2]);
+            const [, bS, bL] = rgbToHsl(e.bg[0], e.bg[1], e.bg[2]);
+            return (
+                tS < greyTextSatMax &&
+                tL >= greyTextLumaMin &&
+                tL <= greyTextLumaMax &&
+                bS >= bgSatMin &&
+                bL >= bgLumaMin &&
+                bL <= bgLumaMax &&
+                e.rect.w > 40 &&
+                e.fontSize >= 11
+            );
+        });
+
+        if (greyOnColour.length >= minViolations) {
+            const worst = greyOnColour.reduce((a, b) => {
+                const [, bSa] = rgbToHsl(a.bg[0], a.bg[1], a.bg[2]);
+                const [, bSb] = rgbToHsl(b.bg[0], b.bg[1], b.bg[2]);
+                return bSb > bSa ? b : a;
+            });
+            const zone = zoneDesc(worst.rect.x + worst.rect.w / 2, worst.rect.y + worst.rect.h / 2, vpW, vpH);
+            const worstQuote = elQ(worst);
+            findings.push({
+                id: nid(),
+                category: 'Colour Palette',
+                severity: greyOnColour.length >= 6 ? 'warning' : 'info',
+                element: worstQuote
+                    ? `${greyOnColour.length} grey text element${greyOnColour.length !== 1 ? 's' : ''} on a coloured background — e.g. ${worstQuote} (${zone})`
+                    : `${greyOnColour.length} grey text element${greyOnColour.length !== 1 ? 's' : ''} placed on a coloured background (${zone})`,
+                issue: `${greyOnColour.length} text element${greyOnColour.length !== 1 ? 's' : ''} use a neutral grey colour on a saturated, coloured background. This is a common hierarchy mistake: grey text works well on white backgrounds because it reduces contrast relative to black, creating a clear primary/secondary hierarchy. On a coloured background, however, grey text does not follow the same rule — instead of appearing subtly de-emphasised, it can look washed out, disabled, or simply muddy, because the grey sits between the hue of the background and pure white without a clear relationship to either.`,
+                recommendation: 'On coloured backgrounds, derive secondary text colour from the background hue rather than using neutral grey. Choose a colour with the same hue as the background and adjust saturation and lightness until it looks appropriately de-emphasised. For example, on a blue card, use a lighter, less saturated blue for secondary text instead of mid-grey. This maintains hierarchy while keeping the text legible and tonally cohesive.',
+                boundingBox: toBBox(worst.rect, vpW, vpH),
+                bookImages: [
+                    { src: 'image37.png', caption: 'Grey text on white backgrounds works by reducing contrast — but the same grey on a coloured background looks wrong.' },
+                    { src: 'image38.jpeg', caption: 'Making text closer to the background colour creates hierarchy on coloured cards, not making it grey.' },
+                    { src: 'image40.jpeg', caption: 'Applying grey text on top of a coloured card creates unintended muddy contrast.' },
+                    { src: 'image41.png', caption: 'Hand-pick a hue-matched tinted colour based on the background — adjust saturation and lightness instead of going grey.' },
+                ],
+            });
         }
     }
 
@@ -2010,6 +2211,11 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                     issue: `${tooTight.length} text areas have line spacing below 1.3× the font size. Text lines that sit too close together are hard to read — the eye struggles to track from the end of one line back to the start of the next, and the descenders of one row visually collide with the ascenders of the row below.`,
                     recommendation: 'Set line-height to 1.4–1.6 for body text. In CSS: `line-height: 1.5` on your paragraph or body styles covers most cases. Headings (24px+) can use tighter leading of 1.1–1.3 since they are short lines read in a single glance.',
                     boundingBox: toBBox(worst.rect, vpW, vpH),
+                    bookImages: [
+                        { src: 'image122.jpg', caption: 'Tight line spacing makes it easy to land on the wrong line when eyes return to the left margin.' },
+                        { src: 'image123.jpg', caption: 'Line-height and paragraph width should be proportional — narrow content can use 1.5, wide content may need up to 2.' },
+                        { src: 'image124.jpg', caption: 'Small text needs extra line spacing so the eye can reliably find the next line when text wraps.' },
+                    ],
                 });
             } else if (tooLoose.length >= 3) {
                 const worst = tooLoose.reduce((a, b) =>
@@ -2912,6 +3118,11 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                     issue: `${oversizedIconImgs.length} icon${oversizedIconImgs.length !== 1 ? 's' : ''} are rendered at 40+px or larger. Icons are designed to be sharp and legible at 16–24px; scaling them up to 40+px makes them look chunky and disproportionately heavy compared to surrounding text and other UI elements. Bitmap icons also degrade in quality at larger render sizes.`,
                     recommendation: 'Keep the icon at its native small size (16–24px) and place it inside a larger coloured container instead — this is the "icon-in-container" pattern. The container provides the visual footprint and weight while the icon itself stays sharp and proportional. This scales to any size without distorting the icon.',
                     boundingBox: toBBox(worst.rect, vpW, vpH),
+                    bookImages: [
+                        { src: 'image233.jpg', caption: 'Scaling an icon to 3–4× its intended size makes it look chunky and disproportionately heavy.' },
+                        { src: 'image234.jpg', caption: 'Keeping the icon at native size inside a larger coloured container provides visual footprint without distortion.' },
+                        { src: 'image235.png', caption: 'The icon-in-container technique: the container scales to any size while the icon stays sharp.' },
+                    ],
                 });
             }
         }
@@ -3224,6 +3435,13 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
                     ? `Because parts of this text already use a solid-colour box/badge treatment, first standardize that pattern: keep a consistent, sufficiently opaque background behind all over-image text and verify APCA contrast against the badge colour. If any labels still blend into bright image zones, add a subtle overlay behind the image area as a second layer of protection.`
                     : `Protect text legibility over images with one of: (1) a semi-transparent dark or light scrim placed behind the text (e.g. rgba(0,0,0,0.4)); (2) a text-shadow or drop-shadow matching the text colour's luminance; (3) repositioning text to a solid-colour area adjacent to the image; (4) a solid-colour badge or pill background behind the text. The scrim approach is most robust for photographic content.`,
                 boundingBox: toBBox(worst.rect, vpW, vpH),
+                bookImages: [
+                    { src: 'image225.png', caption: 'White text directly on a photo is readable over dark areas but invisible against bright zones.' },
+                    { src: 'image227.png', caption: 'A semi-transparent dark overlay levels brightness so text stays readable everywhere on the photo.' },
+                    { src: 'image228.png', caption: 'A subtle text-shadow creates local contrast without darkening the whole image.' },
+                    { src: 'image229.png', caption: 'Desaturating and tinting the background photo makes it cohesive and easier to overlay text on.' },
+                    { src: 'image230.png', caption: 'Combining desaturation and text-shadow gives readable text over any photo regardless of its content.' },
+                ],
             });
         }
     }
@@ -3232,8 +3450,11 @@ export function analyseAlgorithmically(elements, vpW, vpH) {
     const penalty = findings.reduce(
         (acc, f) => acc + (f.severity === 'critical' ? 12 : f.severity === 'warning' ? 7 : 3), 0
     );
+    // Additional penalty if 3 or more issues were found
+    const additionalPenalty = findings.length >= 3 ? 7 : 0;
+    const totalPenalty = penalty + additionalPenalty;
     // Cap penalty so the minimum score stays meaningful (not zero for busy pages)
-    const overallScore = Math.max(20, Math.min(95, 95 - Math.min(penalty, 70)));
+    const overallScore = Math.max(20, Math.min(95, 95 - Math.min(totalPenalty, 70)));
 
     if (strengths.length === 0) {
         strengths.push('The overall layout looks balanced and well-structured.');

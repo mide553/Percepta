@@ -234,6 +234,233 @@ Use this technical context to provide more informed recommendations about the vi
 	throw lastErr ?? new Error('Gemini request failed');
 }
 
+function getInlineImagePart(candidates, { includeThought = false } = {}) {
+	for (let ci = 0; ci < (candidates?.length ?? 0); ci++) {
+		const parts = candidates?.[ci]?.content?.parts ?? [];
+		for (const part of parts) {
+			if (!includeThought && part?.thought) continue;
+			const inline = part?.inline_data ?? part?.inlineData;
+			if (inline?.data && (inline?.mime_type || inline?.mimeType)) {
+				return {
+					data: inline.data,
+					mimeType: inline.mime_type ?? inline.mimeType,
+					candidateIndex: ci,
+					thought: !!part?.thought,
+				};
+			}
+		}
+	}
+	return null;
+}
+
+
+// ---------------------------------------------------------------------------
+// Gemini image generation — private helpers
+// ---------------------------------------------------------------------------
+
+const GEMINI_IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
+const GEMINI_RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+
+function buildGeminiImageRequestBody(prompt, imageB64, mimeType = 'image/png') {
+	return JSON.stringify({
+		contents: [{
+			role: 'user',
+			parts: [
+				{ text: prompt },
+				{ inlineData: { mimeType, data: imageB64 } }
+			]
+		}],
+		generationConfig: {
+			responseModalities: ['IMAGE']
+		}
+	});
+}
+
+function parseStreamedImageResponse(rawText) {
+	let chunks;
+	try {
+		chunks = JSON.parse(rawText);
+	} catch {
+		try {
+			chunks = JSON.parse('[' + rawText.replace(/,\s*$/, '') + ']');
+		} catch {
+			throw new Error('Failed to parse streamed image response as JSON');
+		}
+	}
+	if (!Array.isArray(chunks)) chunks = [chunks];
+
+	for (const chunk of chunks) {
+		const inline = getInlineImagePart(chunk?.candidates, { includeThought: false });
+		if (inline?.data && inline?.mimeType) return inline;
+	}
+	for (const chunk of chunks) {
+		const inline = getInlineImagePart(chunk?.candidates, { includeThought: true });
+		if (inline?.data && inline?.mimeType) return inline;
+	}
+	return null;
+}
+
+async function postGeminiImageRequest(apiKey, body, { timeoutMs = 150000 } = {}) {
+	const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_IMAGE_MODEL}:streamGenerateContent?key=${apiKey}`;
+	for (let attempt = 0; attempt < 2; attempt++) {
+		if (attempt > 0) await new Promise(r => setTimeout(r, 3000 * attempt));
+		const response = await fetch(url, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body,
+			signal: AbortSignal.timeout(timeoutMs)
+		});
+		if (response.ok) return response;
+		const retryable = GEMINI_RETRYABLE_STATUS.has(response.status);
+		const errBody = await response.json().catch(() => ({}));
+		const message = errBody.error?.message ?? `Gemini API error ${response.status}`;
+		console.warn(`[Percepta] Gemini image attempt ${attempt + 1} failed: ${response.status} - ${message}`, JSON.stringify(errBody?.error ?? errBody));
+		if (!retryable) throw new Error(message);
+	}
+	throw new Error('Gemini image request failed after retries');
+}
+
+// ---------------------------------------------------------------------------
+// Public: generate an image from a prompt + input image via Gemini
+// Returns a data URI string, e.g. "data:image/png;base64,..."
+// ---------------------------------------------------------------------------
+async function geminiGenerateImage(apiKey, prompt, imageB64, { mimeType = 'image/png', timeoutMs = 150000 } = {}) {
+	const body = buildGeminiImageRequestBody(prompt, imageB64, mimeType);
+	const response = await postGeminiImageRequest(apiKey, body, { timeoutMs });
+	const rawText = await response.text();
+	const inline = parseStreamedImageResponse(rawText);
+	if (!inline?.data || !inline?.mimeType) {
+		throw new Error(`Gemini image response contained no image part (raw length: ${rawText.length})`);
+	}
+	return `data:${inline.mimeType};base64,${inline.data}`;
+}
+
+const ANALYSIS_STEP_TIMEOUT_MS = 60000;
+
+function createStepTimeoutError(label) {
+	const err = new Error(`Analysis timed out during ${label}. Please try again.`);
+	err.name = 'AnalysisStepTimeoutError';
+	return err;
+}
+
+async function withStepTimeout(promise, label, timeoutMs = ANALYSIS_STEP_TIMEOUT_MS) {
+	let timerId;
+	try {
+		return await Promise.race([
+			promise,
+			new Promise((_, reject) => {
+				timerId = setTimeout(() => reject(createStepTimeoutError(label)), timeoutMs);
+			})
+		]);
+	} finally {
+		clearTimeout(timerId);
+	}
+}
+
+async function withOptionalStepTimeout(promise, label, onTimeout, timeoutMs = ANALYSIS_STEP_TIMEOUT_MS) {
+	try {
+		return await withStepTimeout(promise, label, timeoutMs);
+	} catch (err) {
+		if (err?.name === 'AnalysisStepTimeoutError') {
+			return await onTimeout(err);
+		}
+		throw err;
+	}
+}
+
+async function captureViewportScreenshot(page, vpW, vpH, perf) {
+	const withTimeout = async (promise, timeoutMs, message) => {
+		let timerId;
+		try {
+			return await Promise.race([
+				promise,
+				new Promise((_, reject) => {
+					timerId = setTimeout(() => reject(new Error(message)), timeoutMs);
+				})
+			]);
+		} finally {
+			clearTimeout(timerId);
+		}
+	};
+
+	// Stop any ongoing page loads / pending frames
+	try { await page.evaluate(() => window.stop()); } catch { /* ignore */ }
+
+	// Use CDP directly — bypasses Puppeteer v22+'s internal "settle" waiting logic
+	// so page.screenshot() doesn't hang on pages with infinite animations/rAF loops.
+	const client = await page.createCDPSession();
+	try {
+		perf('screenshot capture started');
+		try {
+			const { data } = await withTimeout(
+				client.send('Page.captureScreenshot', {
+					format: 'png',
+					clip: { x: 0, y: 0, width: vpW, height: vpH, scale: 1 },
+					fromSurface: true,
+					captureBeyondViewport: false,
+				}),
+				15000,
+				'Viewport screenshot timed out'
+			);
+			return Buffer.from(data, 'base64');
+		} catch (err) {
+			console.warn('[Percepta] Primary screenshot capture failed, retrying without clip:', err.message);
+			perf('screenshot fallback started');
+			const { data } = await withTimeout(
+				client.send('Page.captureScreenshot', {
+					format: 'png',
+					fromSurface: true,
+				}),
+				15000,
+				'Simple screenshot fallback timed out'
+			);
+			return Buffer.from(data, 'base64');
+		}
+	} finally {
+		try { await client.detach(); } catch { /* ignore */ }
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Heatmap
+// ---------------------------------------------------------------------------
+
+const HEATMAP_PROMPT =
+	'Create a predictive visual-attention heatmap overlay for this exact webpage screenshot. ' +
+	'Keep the original screenshot geometry and content. Do not redesign, restyle, crop, or replace the UI. ' +
+	'Highlight only likely attention hotspots over real UI elements and keep low-attention areas mostly unchanged. ' +
+	'Do not add any annotations, arrows, lines, circles, boxes, labels, captions, legends, or explanatory marks. ' +
+	'Do not add any new text at all. Keep only the text that already exists in the original screenshot. ' +
+	'Do not add logos, icons, symbols, or extra UI elements. ' +
+	'Use translucent red/orange/yellow heat, with clear local hotspots rather than one full-page glow. ' +
+	'Return only one final image that is the original screenshot plus heat overlay.';
+
+async function buildHeatmap(apiKey, screenshotB64, elements, vpW, vpH) {
+	const HEATMAP_TIMEOUT_MS = 60000;
+	const heatmapPipeline = (async () => {
+		try {
+			const result = await geminiGenerateImage(apiKey, HEATMAP_PROMPT, screenshotB64, { timeoutMs: 55000 });
+			console.info('[Percepta] Heatmap generated with', GEMINI_IMAGE_MODEL);
+			return result;
+		} catch (err) {
+			console.warn('[Percepta] Gemini heatmap unavailable, skipping heatmap:', err.message);
+			return null;
+		}
+	})();
+
+	const timeoutResult = await Promise.race([
+		heatmapPipeline,
+		new Promise(resolve => setTimeout(() => resolve('__HEATMAP_TIMEOUT__'), HEATMAP_TIMEOUT_MS)),
+	]);
+
+	if (timeoutResult === '__HEATMAP_TIMEOUT__') {
+		console.warn(`[Percepta] Heatmap generation exceeded ${HEATMAP_TIMEOUT_MS / 1000}s — currently unavailable.`);
+		return null;
+	}
+
+	return timeoutResult;
+}
+
 /**
  * Pre-filter images by checking if basic conditions are met based on full finding context.
  * Returns true if the image should be kept (condition likely met or no clear condition).
@@ -504,7 +731,8 @@ function isFindingInActiveScope(finding) {
 		const crampedInternal = hasAny(['cramped', 'compressed', 'too close', 'less than 8 pixels', 'tight spacing', 'padding']);
 		const overstretchedRows = hasAny(['full-width', 'stretched', 'spread out', 'too wide', 'line lengths uncomfortable']);
 		const spacingScale = hasAny(['spacing scale', 'different spacing values', 'inconsistent spacing', 'random spacing']);
-		return crampedInternal || overstretchedRows || spacingScale;
+		const stackGapInconsistency = hasAny(['vertical content stack', 'vertically stacked', 'gaps between items', 'same stack', 'uniform gap']);
+		return crampedInternal || overstretchedRows || spacingScale || stackGapInconsistency;
 	}
 
 	if (category === 'Interactive Targets') {
@@ -1192,22 +1420,22 @@ export async function POST({ request }) {
 				});
 
 				// Small pause so any close animations complete before screenshot
-				await new Promise(r => setTimeout(r, 300));
+				await new Promise(r => setTimeout(r, 3000));
 				_perf('cookies dismissed, taking screenshot');
 				send({ type: 'step', step: 1 });
-				const screenshotBuf = await page.screenshot({
-					type: 'png',
-					clip: { x: 0, y: 0, width: VP_W, height: VP_H }
-				});
+				const screenshotBuf = await withStepTimeout(
+					captureViewportScreenshot(page, VP_W, VP_H, _perf),
+					'screenshot capture'
+				);
 				const screenshotB64 = Buffer.from(screenshotBuf).toString('base64');
 				const screenshotDataUrl = `data:image/png;base64,${screenshotB64}`;
 				_perf('screenshot captured');
 
 				// -- Extract and analyze CSS, HTML, and JavaScript ----------------------
 				send({ type: 'step', step: 2 });
-				const cssAnalysis = await extractAndAnalyzeCSS(page);
-				const htmlAnalysis = await extractAndAnalyzeHTML(page);
-				const jsAnalysis = await extractAndAnalyzeJS(page);
+				const cssAnalysis = await withStepTimeout(extractAndAnalyzeCSS(page), 'CSS analysis');
+				const htmlAnalysis = await withStepTimeout(extractAndAnalyzeHTML(page), 'HTML analysis');
+				const jsAnalysis = await withStepTimeout(extractAndAnalyzeJS(page), 'JavaScript analysis');
 				cssAnalysis.findings = cssAnalysis.findings.map((f, i) => ({ id: `CSS${String(i + 1).padStart(3, '0')}`, ...f }));
 				htmlAnalysis.findings = htmlAnalysis.findings.map((f, i) => ({ id: `HTML${String(i + 1).padStart(3, '0')}`, ...f }));
 				jsAnalysis.findings = jsAnalysis.findings.map((f, i) => ({ id: `JS${String(i + 1).padStart(3, '0')}`, ...f }));
@@ -1215,7 +1443,7 @@ export async function POST({ request }) {
 
 				if (mode === 'algo') {
 					send({ type: 'step', step: 3 });
-					const { elements, vpW, vpH } = await page.evaluate(() => {
+					const { elements, vpW, vpH } = await withStepTimeout(page.evaluate(() => {
 						/**
 						 * @param {string} str
 						 * @returns {number[]}
@@ -1324,15 +1552,20 @@ export async function POST({ request }) {
 							});
 						}
 						return { elements: results, vpW: vW, vpH: vH };
-					});
+					}), 'viewport extraction');
 
 					const analysis = analyseAlgorithmically(elements, vpW, vpH);
+					send({ type: 'step', step: 7 });
+					_perf('building heatmap (algo mode)...');
+					const heatmap = await buildHeatmap(apiKey, screenshotB64, elements, vpW, vpH);
+					_perf('heatmap ready (algo mode)');
 					_perf('algorithmic analysis done (algo mode)');
 
-					send({ type: 'step', step: 7 });
+					send({ type: 'step', step: 8 });
 					send({
 						type: 'done', result: {
 							screenshot: screenshotDataUrl,
+							heatmap,
 							...analysis,
 							findings: analysis.findings,
 							strengths: analysis.strengths,
@@ -1341,7 +1574,7 @@ export async function POST({ request }) {
 				} else if (mode === 'algo-ai') {
 					// algo-ai: run rule-based analysis, then ask AI to rewrite findings in plain language
 					send({ type: 'step', step: 3 });
-					const { elements, vpW, vpH } = await page.evaluate(() => {
+					const { elements, vpW, vpH } = await withStepTimeout(page.evaluate(() => {
 						/**
 						 * @param {string} str
 						 * @returns {number[]}
@@ -1450,11 +1683,15 @@ export async function POST({ request }) {
 							});
 						}
 						return { elements: results, vpW: vW, vpH: vH };
-					});
+					}), 'viewport extraction');
 
 					const algoAnalysis = analyseAlgorithmically(elements, vpW, vpH);
-					_perf('algorithmic analysis done (algo-ai mode)');
 					send({ type: 'step', step: 4 });
+					_perf('building heatmap (algo-ai mode)...');
+					const heatmap = await buildHeatmap(apiKey, screenshotB64, elements, vpW, vpH);
+					_perf('heatmap ready (algo-ai mode)');
+					_perf('algorithmic analysis done (algo-ai mode)');
+					send({ type: 'step', step: 5 });
 					const baseFindings = filterFindingsToActiveScope([
 						...algoAnalysis.findings,
 					]);
@@ -1467,7 +1704,14 @@ export async function POST({ request }) {
 							js: jsAnalysis.jsData,
 						};
 						_perf('calling Gemini (algo-ai rewrite)...');
-						aiRewrite = await callGeminiWithFindings(apiKey, baseFindings, algoAnalysis.overallScore, codeContext, screenshotB64);
+						aiRewrite = await withOptionalStepTimeout(
+							callGeminiWithFindings(apiKey, baseFindings, algoAnalysis.overallScore, codeContext, screenshotB64),
+							'AI summary',
+							async (timeoutErr) => {
+								console.warn('[Percepta] AI summary unavailable, falling back to algorithmic results:', timeoutErr.message);
+								return null;
+							}
+						);
 						_perf('Gemini algo-ai rewrite done');
 					} catch (aiErr) {
 						console.warn('[Percepta] Gemini unavailable, falling back to algorithmic results:', aiErr.message);
@@ -1477,8 +1721,9 @@ export async function POST({ request }) {
 					const allStrengths = [
 						...(aiRewrite?.strengths ?? algoAnalysis.strengths),
 					];
+					const hasAiFindings = Array.isArray(aiRewrite?.findings) && aiRewrite.findings.length > 0;
 					let rescuedHighSeverity = [];
-					const displayedFindings = aiRewrite?.findings
+					const displayedFindings = hasAiFindings
 						? (() => {
 							const aiFindings = filterFindingsToActiveScope(aiRewrite.findings);
 							const aiIds = new Set(aiFindings.map(f => f.id));
@@ -1493,27 +1738,33 @@ export async function POST({ request }) {
 						: baseFindings;
 					const displayedScore = computeOverallScoreFromFindings(displayedFindings);
 
-					const noImages = aiRewrite !== null &&
+					const noImages = hasAiFindings &&
 						aiRewrite.findings.every(f => (f.bookImages ?? []).length === 0);
+					const displayedSummary = hasAiFindings
+						? (aiRewrite?.summary ?? algoAnalysis.summary)
+						: algoAnalysis.summary;
+					send({ type: 'step', step: 7 });
 
 					send({
 						type: 'done', result: {
 							screenshot: screenshotDataUrl,
+							heatmap,
 							overallScore: displayedScore,
-							summary: aiRewrite?.summary ?? algoAnalysis.summary,
+							summary: displayedSummary,
 							findings: displayedFindings,
 							strengths: allStrengths,
 							expertNote: algoAnalysis.expertNote,
 							aiUnavailable: aiRewrite === null,
 							aiGateReport: aiRewrite?.gateReport ?? null,
 							rescuedHighSeverityCount: rescuedHighSeverity.length,
+							aiFellBackToAlgorithmic: !hasAiFindings && aiRewrite !== null,
 							noImages,
 						}
 					});
 				} else if (mode === 'compare-algo-ai') {
 					// compare-algo-ai: run algo, then ask AI to rewrite � return both for prose diff view
 					send({ type: 'step', step: 3 });
-					const { elements, vpW, vpH } = await page.evaluate(() => {
+					const { elements, vpW, vpH } = await withStepTimeout(page.evaluate(() => {
 						/** @param {string} str @returns {number[]} */
 						function parseColor(str) {
 							if (!str || str === 'transparent') return [255, 255, 255, 0];
@@ -1614,11 +1865,15 @@ export async function POST({ request }) {
 							});
 						}
 						return { elements: results, vpW: vW, vpH: vH };
-					});
+					}), 'viewport extraction');
 
 					const algoResult = analyseAlgorithmically(elements, vpW, vpH);
-					_perf('algorithmic analysis done (compare-algo-ai mode)');
 					send({ type: 'step', step: 4 });
+					_perf('building heatmap (compare-algo-ai mode)...');
+					const heatmap = await buildHeatmap(apiKey, screenshotB64, elements, vpW, vpH);
+					_perf('heatmap ready (compare-algo-ai mode)');
+					_perf('algorithmic analysis done (compare-algo-ai mode)');
+					send({ type: 'step', step: 5 });
 					let aiRewrite = null;
 					try {
 						// Screenshot-only mode: rewrite only viewport-derived algorithmic findings.
@@ -1631,13 +1886,20 @@ export async function POST({ request }) {
 							js: jsAnalysis.jsData,
 						};
 						_perf('calling Gemini (compare-algo-ai rewrite)...');
-						aiRewrite = await callGeminiWithFindings(apiKey, mergedFindings, algoResult.overallScore, codeContext, screenshotB64);
+						aiRewrite = await withOptionalStepTimeout(
+							callGeminiWithFindings(apiKey, mergedFindings, algoResult.overallScore, codeContext, screenshotB64),
+							'AI summary',
+							async (timeoutErr) => {
+								console.warn('[Percepta] AI summary unavailable, falling back to algorithmic results:', timeoutErr.message);
+								return null;
+							}
+						);
 						_perf('Gemini compare-algo-ai rewrite done');
 					} catch (aiErr) {
 						console.warn('[Percepta] Gemini unavailable, falling back to algorithmic results:', aiErr.message);
 					}
 
-					send({ type: 'step', step: 6 });
+					send({ type: 'step', step: 7 });
 					// Screenshot-only mode: keep only viewport-derived algorithmic findings.
 					const algoWithExtensions = {
 						...algoResult,
@@ -1651,11 +1913,13 @@ export async function POST({ request }) {
 
 					const noImages = aiRewrite !== null &&
 						aiRewrite.findings.every(f => (f.bookImages ?? []).length === 0);
+					send({ type: 'step', step: 8 });
 
 					send({
 						type: 'done', result: {
 							mode: 'compare-algo-ai',
 							screenshot: screenshotDataUrl,
+							heatmap,
 							overallScore: algoResult.overallScore,
 							algo: algoWithExtensions,
 							algoAi: {
@@ -1676,7 +1940,7 @@ export async function POST({ request }) {
 						js: jsAnalysis.jsData,
 					};
 					_perf('calling Gemini (ai mode)...');
-					const result = await callGemini(apiKey, screenshotB64, codeContext);
+					const result = await withStepTimeout(callGemini(apiKey, screenshotB64, codeContext), 'AI analysis');
 					_perf('Gemini ai mode done');
 					send({
 						type: 'done', result: {
@@ -1693,7 +1957,7 @@ export async function POST({ request }) {
 				} else {
 					// compare mode � run both algo and AI, return side-by-side with CSS/HTML/JS analysis
 					send({ type: 'step', step: 3 });
-					const { elements, vpW, vpH } = await page.evaluate(() => {
+					const { elements, vpW, vpH } = await withStepTimeout(page.evaluate(() => {
 						/**
 						 * @param {string} str
 						 * @returns {number[]}
@@ -1802,7 +2066,7 @@ export async function POST({ request }) {
 							});
 						}
 						return { elements: results, vpW: vW, vpH: vH };
-					});
+					}), 'viewport extraction');
 
 					const algoResult = analyseAlgorithmically(elements, vpW, vpH);
 					_perf('algorithmic analysis done (compare mode)');
@@ -1813,7 +2077,14 @@ export async function POST({ request }) {
 						js: jsAnalysis.jsData,
 					};
 					_perf('calling Gemini (compare AI analysis)...');
-					const aiResult = await callGemini(apiKey, screenshotB64, codeContext);
+					const aiResult = await withOptionalStepTimeout(
+						callGemini(apiKey, screenshotB64, codeContext),
+						'AI analysis',
+						async (timeoutErr) => {
+							console.warn('[Percepta] Compare AI analysis unavailable, returning algorithmic result only:', timeoutErr.message);
+							return null;
+						}
+					);
 					_perf('Gemini compare AI analysis done');
 					send({ type: 'step', step: 6 });
 
@@ -1828,7 +2099,7 @@ export async function POST({ request }) {
 						],
 					};
 
-					const aiWithExtensions = {
+					const aiWithExtensions = aiResult ? {
 						...aiResult,
 						findings: filterFindingsToActiveScope([
 							...(aiResult.findings || []),
@@ -1836,6 +2107,10 @@ export async function POST({ request }) {
 						strengths: [
 							...(aiResult.strengths || []),
 						],
+					} : {
+						summary: 'AI analysis is currently unavailable. Please try again.',
+						findings: [],
+						strengths: [],
 					};
 
 					send({
@@ -1843,6 +2118,7 @@ export async function POST({ request }) {
 							mode: 'compare',
 							screenshot: screenshotDataUrl,
 							algo: algoWithExtensions,
+							aiUnavailable: aiResult === null,
 							ai: aiWithExtensions,
 						}
 					});
