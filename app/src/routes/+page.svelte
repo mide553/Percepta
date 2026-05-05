@@ -736,7 +736,7 @@
 					<svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;margin-top:2px;"><circle cx="7" cy="7" r="6" stroke="var(--warn-text)" stroke-width="1.3"/><path d="M7 4v3.5M7 9.5v.5" stroke="var(--warn-text)" stroke-width="1.4" stroke-linecap="round"/></svg>
 					<div>
 						<p style="font-size:13px;font-weight:600;color:var(--warn-text);margin:0 0 4px;">Plain-language summary temporarily unavailable</p>
-						<p style="font-size:13px;color:var(--text-2);margin:0;line-height:1.5;">API is currently overloaded, so the results are displayed as direct algorithmic output without simplified explanations or reference images. The analysis remains accurate, but the descriptions may be more technical than usual. For a more detailed analysis, you can try auditing the page again in a few minutes.</p>
+						<p style="font-size:13px;color:var(--text-2);margin:0;line-height:1.5;">API is currently overloaded, so the results are displayed as direct algorithmic output without simplified explanations or reference images. The analysis remains accurate, but the descriptions may be more technical than usual. For a more detailed analysis, you can try auditing the page again in a few minutes. </p>
 					</div>
 				</div>
 			{/if}
