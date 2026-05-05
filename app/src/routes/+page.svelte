@@ -461,7 +461,7 @@
 							onclick={reset}
 							style="padding:10px 14px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--text-4);font-size:13px;cursor:pointer;"
 							aria-label="Clear URL"
-						>?</button>
+						>✕</button>
 					{/if}
 				</div>
 			</div>
@@ -1163,7 +1163,7 @@
 		<div
 			role="presentation"
 			onclick={() => { feedbackOpen = false; }}
-			style="position:fixed;inset:0;background:rgba(0,0,0,0.25);z-index:1001;backdrop-filter:blur(2px);"
+			style="position:fixed;inset:0;background:rgba(0,0,0,0.25);z-index:1001;"
 		></div>
 
 		<!-- Drawer -->
