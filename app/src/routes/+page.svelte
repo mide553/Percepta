@@ -296,7 +296,7 @@
 	});
 
 	async function submitFeedback() {
-		if (!feedbackComment.trim()) return;
+		if (!feedbackComment.trim() || !feedbackPractical || !feedbackHelpful || !feedbackWouldUse || !feedbackCicd) return;
 		feedbackStatus = 'sending';
 		feedbackError = '';
 		try {
@@ -1201,7 +1201,12 @@
 						>Close</button>
 					</div>
 				{:else}
-					<p style="font-size:13px;color:var(--text-3);line-height:1.6;margin-bottom:20px;">Comments are submitted privately and not shown publicly. This feedback helps improve Percepta.</p>
+					<!-- Bachelor thesis context notice -->
+					<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:13px 14px;margin-bottom:18px;">
+						<p style="font-size:12px;font-weight:700;color:#1d4ed8;margin:0 0 4px;">Research Prototype</p>
+						<p style="font-size:12px;color:#1e40af;line-height:1.6;margin:0;">Percepta is a prototype built for a bachelor thesis on <em>"Automated Methods for UI Evaluation: Effectiveness, Limitations and Applications"</em>. The app is in active development and currently covers only a limited set of UI checks. Your feedback is used for academic research.</p>
+					</div>
+					<p style="font-size:13px;color:var(--text-3);line-height:1.6;margin-bottom:20px;">Comments are submitted privately and not shown publicly.</p>
 
 					<div style="display:flex;flex-direction:column;gap:14px;">
 						<div>
@@ -1230,7 +1235,7 @@
 						</div>
 						<!-- Quick questionnaire -->
 						<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:14px;">
-							<p style="font-size:12px;font-weight:700;color:var(--text-2);margin:0;letter-spacing:-0.01em;">Quick Questions <span style="color:var(--text-4);font-weight:400;font-size:11px;">(optional)</span></p>
+							<p style="font-size:12px;font-weight:700;color:var(--text-2);margin:0;letter-spacing:-0.01em;">Quick Questions <span style="color:#ef4444;font-size:10px;margin-left:3px;">required</span></p>
 
 							{#snippet ratingRow(label, value, setter, labels)}
 								<div>
@@ -1254,11 +1259,12 @@
 						</div>
 
 						<div>
-							<label for="fb-comment" style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Comment <span style="color:#ef4444;font-size:10px;margin-left:3px;">required</span></label>
+							<label for="fb-comment" style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Your thoughts <span style="color:#ef4444;font-size:10px;margin-left:3px;">required</span></label>
+							<p style="font-size:11px;color:var(--text-4);margin:0 0 6px;line-height:1.5;">What do you think about automated tools for UI evaluation in general? Do you see them as effective, limited, or situational? Any thoughts on where they help most or fall short are valuable for our research.</p>
 							<textarea
 								id="fb-comment"
 							bind:value={feedbackComment}
-								placeholder="Share your thoughts — what works well, what's confusing, what could be improved…"
+								placeholder="Share your thoughts…"
 								maxlength="2000"
 								rows="6"
 								disabled={feedbackStatus === 'sending'}
@@ -1267,11 +1273,11 @@
 							<p style="font-size:11px;color:var(--text-4);text-align:right;margin-top:3px;">{feedbackComment.length}/2000</p>
 						</div>
 
-						<!-- Optional: tested URLs + missed issues -->
+						<!-- Research context: URL -->
 						<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:14px;">
-							<p style="font-size:12px;font-weight:700;color:var(--text-2);margin:0;letter-spacing:-0.01em;">Help us improve detection <span style="color:var(--text-4);font-weight:400;font-size:11px;">(optional)</span></p>
+							<p style="font-size:12px;font-weight:700;color:var(--text-2);margin:0;letter-spacing:-0.01em;">Research context <span style="color:var(--text-4);font-weight:400;font-size:11px;">(optional)</span></p>
 							<div>
-								<label for="fb-tested-url" style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Website(s) you tested</label>
+								<label for="fb-tested-url" style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Website you analyzed</label>
 								<input
 									id="fb-tested-url"
 									type="url"
@@ -1283,19 +1289,6 @@
 								/>
 								<p style="font-size:11px;color:var(--text-4);margin-top:3px;">Paste the URL of the site you ran through Percepta</p>
 							</div>
-							<div>
-								<label for="fb-missed" style="display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Issues Percepta missed</label>
-								<textarea
-									id="fb-missed"
-									bind:value={feedbackMissedIssues}
-									placeholder="e.g. Low-contrast placeholder text wasn't flagged, icon-only buttons had no accessible label—"
-									maxlength="1000"
-									rows="4"
-									disabled={feedbackStatus === 'sending'}
-									style="width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:9px;font-size:13px;font-family:inherit;color:var(--text);background:var(--surface-2);outline:none;resize:vertical;min-height:90px;box-sizing:border-box;"
-								></textarea>
-								<p style="font-size:11px;color:var(--text-4);text-align:right;margin-top:3px;">{feedbackMissedIssues.length}/1000</p>
-							</div>
 						</div>
 
 						{#if feedbackStatus === 'error'}
@@ -1304,8 +1297,8 @@
 
 						<button
 							onclick={submitFeedback}
-							disabled={!feedbackComment.trim() || feedbackStatus === 'sending'}
-							style="width:100%;padding:11px;border-radius:10px;border:none;background:{feedbackComment.trim() && feedbackStatus !== 'sending' ? '#2563eb' : 'var(--surface-3)'};color:{feedbackComment.trim() && feedbackStatus !== 'sending' ? '#fff' : 'var(--text-4)'};font-size:13px;font-weight:600;cursor:{feedbackComment.trim() && feedbackStatus !== 'sending' ? 'pointer' : 'not-allowed'};transition:all 0.15s;display:flex;align-items:center;justify-content:center;gap:7px;"
+							disabled={!(feedbackComment.trim() && feedbackPractical && feedbackHelpful && feedbackWouldUse && feedbackCicd) || feedbackStatus === 'sending'}
+							style="width:100%;padding:11px;border-radius:10px;border:none;background:{(feedbackComment.trim() && feedbackPractical && feedbackHelpful && feedbackWouldUse && feedbackCicd && feedbackStatus !== 'sending') ? '#2563eb' : 'var(--surface-3)'};color:{(feedbackComment.trim() && feedbackPractical && feedbackHelpful && feedbackWouldUse && feedbackCicd && feedbackStatus !== 'sending') ? '#fff' : 'var(--text-4)'};font-size:13px;font-weight:600;cursor:{(feedbackComment.trim() && feedbackPractical && feedbackHelpful && feedbackWouldUse && feedbackCicd && feedbackStatus !== 'sending') ? 'pointer' : 'not-allowed'};transition:all 0.15s;display:flex;align-items:center;justify-content:center;gap:7px;"
 						>
 							{#if feedbackStatus === 'sending'}
 								<span style="width:14px;height:14px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;display:inline-block;animation:spin 0.8s linear infinite;"></span>
